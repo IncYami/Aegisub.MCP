@@ -401,16 +401,30 @@ impl SubtitleServer {
     }
 }
 
-#[tool_handler(
-    name = "aegisub-mcp",
-    version = "0.1.0",
-    instructions = "Read ASS, SRT or WebVTT subtitles and align optional context tracks. ASS is the primary format. Call get_style_guide before choosing a font or planning typesetting. Keep Dialogue events on the Default style and use local override tags for typesetting. To start an empty ASS script, call create_ass, then insert_events_from_source to copy cues from another subtitle. Before editing an existing subtitle, call prepare_subtitle to save a timestamped backup in .backup. Use the returned editable_path for edits to the original file. Fetch a current revision before every edit. For translation, list_text_groups can present identical visible text once across dialogue and signs; use replace_text_group to apply one translation to all safe occurrences. Once font choices are final, collect installed font files with collect_fonts."
-)]
-impl ServerHandler for SubtitleServer {}
+#[tool_handler]
+impl ServerHandler for SubtitleServer {
+    fn get_info(&self) -> rmcp::model::ServerConfig {
+        rmcp::model::ServerConfig::new(rmcp::model::ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(rmcp::model::Implementation::new(
+                env!("CARGO_PKG_NAME"),
+                env!("CARGO_PKG_VERSION"),
+            ))
+            .with_instructions("Read ASS, SRT or WebVTT subtitles and align optional context tracks. ASS is the primary format. Call get_style_guide before choosing a font or planning typesetting. Keep Dialogue events on the Default style and use local override tags for typesetting. To start an empty ASS script, call create_ass, then insert_events_from_source to copy cues from another subtitle. Before editing an existing subtitle, call prepare_subtitle to save a timestamped backup in .backup. Use the returned editable_path for edits to the original file. Fetch a current revision before every edit. For translation, list_text_groups can present identical visible text once across dialogue and signs; use replace_text_group to apply one translation to all safe occurrences. Once font choices are final, collect installed font files with collect_fonts.")
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn server_identity_matches_package_metadata() {
+        let info = SubtitleServer::default().get_info();
+        assert_eq!(info.server_info.name, env!("CARGO_PKG_NAME"));
+        assert_eq!(info.server_info.version, env!("CARGO_PKG_VERSION"));
+        assert!(info.capabilities.tools.is_some());
+        assert!(info.instructions.is_some());
+    }
 
     #[test]
     fn style_guide_tool_exposes_project_convention() {

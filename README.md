@@ -33,6 +33,32 @@ cargo run
 
 `cargo run` starts the MCP server over `stdio`. Configure an MCP client to run `target/debug/aegisub-mcp` or `nix-shell --run 'cargo run --quiet'` from this directory. The server reserves stdout for the MCP protocol.
 
+## Install on NixOS without flakes
+
+The `default.nix` package builds the server from `Cargo.lock`, uses the package name and version from `Cargo.toml`, and provides `fc-list` for the `collect_fonts` tool. Add it to a non-flake NixOS configuration:
+
+```nix
+{ pkgs, ... }:
+
+let
+  aegisubMcpSource = builtins.fetchGit {
+    url = "https://github.com/IncYami/Aegisub.MCP.git";
+    ref = "main";
+  };
+in
+{
+  environment.systemPackages = [
+    (pkgs.callPackage (aegisubMcpSource + "/default.nix") {})
+  ];
+}
+```
+
+Apply the configuration with `sudo nixos-rebuild switch`. The installed command is `aegisub-mcp`; point your MCP client at that command and use `stdio` transport. `fetchGit` follows the remote `main` branch, subject to Nix's fetch cache. To pin a known build, add a `rev` containing the full Git commit hash to the `fetchGit` attributes. A local package build can be checked with:
+
+```sh
+nix-build -E 'let pkgs = import <nixpkgs> {}; in pkgs.callPackage ./default.nix {}'
+```
+
 ## Version control
 
 The `main` branch tracks the Rust source, Nix shell, Cargo manifests, documentation, project instructions, and the neutral-named ASS test fixture in `tests/fixtures/sample.ass`. Build output, Nix results, backup directories, personal `rev.txt`, and root-level subtitle files are ignored. Subtitle files are excluded from Git line-ending normalization so the fixture keeps its original bytes.
