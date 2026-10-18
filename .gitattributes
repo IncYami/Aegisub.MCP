@@ -1,0 +1,9 @@
+* text=auto
+*.rs text eol=lf
+*.md text eol=lf
+*.nix text eol=lf
+Cargo.lock text eol=lf
+*.ass binary
+*.ssa -text
+*.srt -text
+*.vtt -text
