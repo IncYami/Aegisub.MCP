@@ -1,10 +1,11 @@
-use super::ass::{hash, is_drawing, split_tags};
+use super::ass::{is_drawing, split_tags};
 use super::automation::{GradientPlan, is_per_character_effect};
+use super::autosave::{lock_for_edit, write_with_autosave};
 use super::query::view;
 use super::{
     BatchResult, Document, ReplaceResult, Result, SubtitleFormat, TextEdit, error, timed_text,
 };
-use std::{collections::HashSet, fs, io::Write, path::Path, sync::Mutex};
+use std::{collections::HashSet, fs, path::Path, sync::Mutex};
 
 pub(super) static EDIT_LOCK: Mutex<()> = Mutex::new(());
 fn count_escape(text: &str, escaped: &str) -> usize {
@@ -211,6 +212,7 @@ pub fn replace_text(
     Ok(ReplaceResult {
         previous_revision: batch.previous_revision,
         revision: batch.revision,
+        autosave_path: batch.autosave_path,
         event,
     })
 }
@@ -226,8 +228,10 @@ pub fn replace_text_batch(
     if edits.is_empty() {
         return Err(error("Batch must contain at least one edit"));
     }
-    let path = Path::new(path);
-    let doc = Document::open(path)?;
+    let path = fs::canonicalize(path)
+        .map_err(|e| error(format!("Cannot resolve subtitle for editing: {e}")))?;
+    let _file_lock = lock_for_edit(&path)?;
+    let doc = Document::open(&path)?;
     if doc.revision != expected_revision {
         return Err(error(
             "Revision conflict: file changed; fetch the event again",
@@ -280,36 +284,9 @@ pub fn replace_text_batch(
     }
     output.push_str(&doc.content[cursor..]);
 
-    let parent = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)
-        .map_err(|e| error(format!("Cannot create temporary file: {e}")))?;
-    temporary
-        .as_file()
-        .set_permissions(
-            fs::metadata(path)
-                .map_err(|e| error(e.to_string()))?
-                .permissions(),
-        )
-        .map_err(|e| error(format!("Cannot preserve permissions: {e}")))?;
-    temporary
-        .write_all(output.as_bytes())
-        .map_err(|e| error(format!("Write failed: {e}")))?;
-    temporary
-        .as_file()
-        .sync_all()
-        .map_err(|e| error(format!("Sync failed: {e}")))?;
-    let current = fs::read(path).map_err(|e| error(format!("Cannot recheck file: {e}")))?;
-    if hash(&current) != doc.revision {
-        return Err(error("Revision conflict: file changed during edit"));
-    }
-    temporary
-        .persist(path)
-        .map_err(|e| error(format!("Replace failed: {e}")))?;
-    let revision = hash(output.as_bytes());
-    let updated = Document::open(path)?;
+    let autosave_path = write_with_autosave(&path, &doc.revision, &output)?;
+    let revision = super::ass::hash(output.as_bytes());
+    let updated = Document::open(&path)?;
     let events = edits
         .iter()
         .map(|edit| {
@@ -323,6 +300,7 @@ pub fn replace_text_batch(
     Ok(BatchResult {
         previous_revision: doc.revision,
         revision,
+        autosave_path: autosave_path.display().to_string(),
         events,
     })
 }

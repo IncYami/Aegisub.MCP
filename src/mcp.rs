@@ -24,11 +24,10 @@ impl SubtitleServer {
     fn register_editable_file(&self, path: &str) -> Result<(), String> {
         let path =
             fs::canonicalize(path).map_err(|e| format!("Cannot resolve editable subtitle: {e}"))?;
-        if path
-            .components()
-            .any(|component| component.as_os_str() == ".backup")
-        {
-            return Err("Files inside .backup cannot be edited".to_owned());
+        if path.components().any(|component| {
+            component.as_os_str() == ".backup" || component.as_os_str() == ".autosave"
+        }) {
+            return Err("Files inside .backup or .autosave cannot be edited".to_owned());
         }
         self.editable_files
             .lock()
@@ -40,6 +39,11 @@ impl SubtitleServer {
     fn require_editable_file(&self, path: &str) -> Result<(), String> {
         let canonical =
             fs::canonicalize(path).map_err(|e| format!("Cannot resolve editable file: {e}"))?;
+        if canonical.components().any(|component| {
+            component.as_os_str() == ".backup" || component.as_os_str() == ".autosave"
+        }) {
+            return Err("Files inside .backup or .autosave cannot be edited".to_owned());
+        }
         let registered = self
             .editable_files
             .lock()
@@ -227,7 +231,7 @@ impl SubtitleServer {
     }
 
     #[tool(
-        description = "Back up an existing ASS, SSA, SRT or WebVTT subtitle to a timestamped file in a sibling .backup directory, then authorize edits to the original file in this server session. The backup preserves the original bytes and is never edited by MCP tools. Returns editable_path, backup_path and the current revision."
+        description = "Back up an existing ASS, SSA, SRT or WebVTT subtitle to a timestamped .BACKUP file in a sibling .backup directory, then authorize edits to the original file in this server session. Edits save the displaced version in .autosave with an .AUTOSAVE suffix. The backup preserves the original bytes and is never edited by MCP tools. Returns editable_path, backup_path and the current revision."
     )]
     fn prepare_subtitle(
         &self,
@@ -250,9 +254,11 @@ impl SubtitleServer {
     fn create_ass(&self, Parameters(args): Parameters<CreateAssArgs>) -> CallToolResult {
         if std::path::Path::new(&args.destination_path)
             .components()
-            .any(|component| component.as_os_str() == ".backup")
+            .any(|component| {
+                component.as_os_str() == ".backup" || component.as_os_str() == ".autosave"
+            })
         {
-            return tool_error("Cannot create an editable subtitle inside .backup");
+            return tool_error("Cannot create an editable subtitle inside .backup or .autosave");
         }
         let options = subtitle::AssTemplateOptions {
             title: args.title,
@@ -273,7 +279,7 @@ impl SubtitleServer {
     }
 
     #[tool(
-        description = "Insert one or more source cues into an editable ASS subtitle prepared by prepare_subtitle or created by create_ass. Pass source_ids such as [1] or [1,2,3], source_path in ASS, SRT or WebVTT, destination_path, and expected_revision. Copies timing and text into new Default-style Dialogue events in the requested order. The imported source is never edited. Plain SRT/WebVTT cues only; ASS override text is retained. The batch is atomic and returns the new revision."
+        description = "Insert one or more source cues into an editable ASS subtitle prepared by prepare_subtitle or created by create_ass. Pass source_ids such as [1] or [1,2,3], source_path in ASS, SRT or WebVTT, destination_path, and expected_revision. Copies timing and text into new Default-style Dialogue events in the requested order. The imported source is never edited. Plain SRT/WebVTT cues only; ASS override text is retained. The batch is atomic and returns the new revision and autosave_path for the displaced subtitle."
     )]
     fn insert_events_from_source(
         &self,
@@ -332,7 +338,7 @@ impl SubtitleServer {
     }
 
     #[tool(
-        description = "Replace visible text in an editable subtitle prepared by prepare_subtitle or created by create_ass. Requires the revision from get_event/list_events; fails if the file changed. For ASS, keep every {1}, {2}, etc. tag marker exactly once and in order. Preserves the rest of the file."
+        description = "Replace visible text in an editable subtitle prepared by prepare_subtitle or created by create_ass. Requires the revision from get_event/list_events; fails if the file changed. For ASS, keep every {1}, {2}, etc. tag marker exactly once and in order. Preserves the rest of the file and returns autosave_path for the displaced version."
     )]
     fn replace_text(&self, Parameters(args): Parameters<ReplaceArgs>) -> CallToolResult {
         if let Err(message) = self.require_editable_file(&args.path) {
@@ -347,7 +353,7 @@ impl SubtitleServer {
     }
 
     #[tool(
-        description = "Apply one translation to every occurrence of an exact visible-text group in a registered editable subtitle. Use group_id, source_text, and expected_revision from list_text_groups. Includes dialogue and signs regardless of style or distance in the file. Validates every event before one atomic write; rejects groups containing read-only events or internal ASS tags whose translated placement is ambiguous. Preserves leading and trailing ASS tags and rebuilds supported per-character gradients."
+        description = "Apply one translation to every occurrence of an exact visible-text group in a registered editable subtitle. Use group_id, source_text, and expected_revision from list_text_groups. Includes dialogue and signs regardless of style or distance in the file. Validates every event before one atomic write; rejects groups containing read-only events or internal ASS tags whose translated placement is ambiguous. Preserves leading and trailing ASS tags, rebuilds supported per-character gradients, and returns autosave_path."
     )]
     fn replace_text_group(&self, Parameters(args): Parameters<ReplaceGroupArgs>) -> CallToolResult {
         if let Err(message) = self.require_editable_file(&args.path) {
@@ -363,7 +369,7 @@ impl SubtitleServer {
     }
 
     #[tool(
-        description = "Replace one unique text segment in an editable subtitle prepared by prepare_subtitle or created by create_ass. Requires the current file revision. The search must occur exactly once; in ASS it cannot cross override tags."
+        description = "Replace one unique text segment in an editable subtitle prepared by prepare_subtitle or created by create_ass. Requires the current file revision. The search must occur exactly once; in ASS it cannot cross override tags. Returns autosave_path for the displaced version."
     )]
     fn replace_segment(&self, Parameters(args): Parameters<SegmentArgs>) -> CallToolResult {
         if let Err(message) = self.require_editable_file(&args.path) {
@@ -379,7 +385,7 @@ impl SubtitleServer {
     }
 
     #[tool(
-        description = "Atomically replace visible text in multiple events or cues of one editable subtitle prepared by prepare_subtitle or created by create_ass. Every edit must pass validation; duplicate IDs, stale revisions and invalid tag markers reject the entire batch without writing."
+        description = "Atomically replace visible text in multiple events or cues of one editable subtitle prepared by prepare_subtitle or created by create_ass. Every edit must pass validation; duplicate IDs, stale revisions and invalid tag markers reject the entire batch without writing. Returns autosave_path for the displaced version."
     )]
     fn replace_text_batch(&self, Parameters(args): Parameters<BatchArgs>) -> CallToolResult {
         if let Err(message) = self.require_editable_file(&args.path) {
@@ -409,7 +415,7 @@ impl ServerHandler for SubtitleServer {
                 env!("CARGO_PKG_NAME"),
                 env!("CARGO_PKG_VERSION"),
             ))
-            .with_instructions("Read ASS, SRT or WebVTT subtitles and align optional context tracks. ASS is the primary format. Call get_style_guide before choosing a font or planning typesetting. Keep Dialogue events on the Default style and use local override tags for typesetting. To start an empty ASS script, call create_ass, then insert_events_from_source to copy cues from another subtitle. Before editing an existing subtitle, call prepare_subtitle to save a timestamped backup in .backup. Use the returned editable_path for edits to the original file. Fetch a current revision before every edit. For translation, list_text_groups can present identical visible text once across dialogue and signs; use replace_text_group to apply one translation to all safe occurrences. Once font choices are final, collect installed font files with collect_fonts.")
+            .with_instructions("Read ASS, SRT or WebVTT subtitles and align optional context tracks. ASS is the primary format. Call get_style_guide before choosing a font or planning typesetting. Keep Dialogue events on the Default style and use local override tags for typesetting. To start an empty ASS script, call create_ass, then insert_events_from_source to copy cues from another subtitle. Before editing an existing subtitle, call prepare_subtitle to save a timestamped backup in .backup. Use the returned editable_path for edits to the original file. Each successful edit preserves the displaced subtitle in .autosave and returns autosave_path. Fetch a current revision before every edit. For translation, list_text_groups can present identical visible text once across dialogue and signs; use replace_text_group to apply one translation to all safe occurrences. Once font choices are final, collect installed font files with collect_fonts.")
     }
 }
 
@@ -499,6 +505,12 @@ mod tests {
             visible_text: "Changed".into(),
         }));
         assert_ne!(edited.is_error, Some(true));
+        let autosave_path = edited.structured_content.unwrap()["autosave_path"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(fs::read_to_string(&autosave_path).unwrap(), original);
+        assert!(server.require_editable_file(&autosave_path).is_err());
         assert!(fs::read_to_string(&source).unwrap().contains("Changed"));
         assert_eq!(fs::read_to_string(&backup_path).unwrap(), original);
         let next = server.prepare_subtitle(Parameters(PrepareSubtitleArgs {

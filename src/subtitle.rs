@@ -4,6 +4,7 @@ use std::{collections::BTreeMap, fmt, ops::Range, sync::Arc};
 mod ass;
 mod ass_creation;
 mod automation;
+mod autosave;
 mod backup;
 mod context;
 mod edit;
@@ -145,6 +146,7 @@ pub struct GetResult {
 pub struct ReplaceResult {
     previous_revision: String,
     revision: String,
+    autosave_path: String,
     event: EventView,
 }
 
@@ -157,6 +159,7 @@ pub struct TextEdit {
 pub struct BatchResult {
     previous_revision: String,
     revision: String,
+    autosave_path: String,
     events: Vec<EventView>,
 }
 
@@ -189,6 +192,7 @@ pub struct AssCreationResult {
 pub struct InsertEventsResult {
     previous_revision: String,
     revision: String,
+    autosave_path: String,
     source_revision: String,
     events: Vec<EventView>,
 }

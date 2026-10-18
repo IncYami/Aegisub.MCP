@@ -38,12 +38,25 @@ fn preparation_preserves_timestamped_backups_and_edits_original() {
     assert_eq!(backup.parent().unwrap(), dir.path().join(".backup"));
     let name = backup.file_name().unwrap().to_str().unwrap();
     assert!(name.starts_with("source.20"));
-    assert!(name.ends_with("Z.ass"));
+    assert!(name.ends_with("Z.BACKUP.ass"));
     assert_eq!(fs::read_to_string(backup).unwrap(), original);
     assert!(prepare_subtitle(backup.to_str().unwrap()).is_err());
-    replace_text(&prepared.editable_path, 1, &prepared.revision, "Translated").unwrap();
+    let changed =
+        replace_text(&prepared.editable_path, 1, &prepared.revision, "Translated").unwrap();
     assert!(fs::read_to_string(&source).unwrap().contains("Translated"));
     assert_eq!(fs::read_to_string(backup).unwrap(), original);
+    let autosave = std::path::Path::new(&changed.autosave_path);
+    assert_eq!(autosave.parent().unwrap(), dir.path().join(".autosave"));
+    assert!(
+        autosave
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .ends_with("Z.AUTOSAVE.ass")
+    );
+    assert_eq!(fs::read_to_string(autosave).unwrap(), original);
+    assert!(prepare_subtitle(autosave.to_str().unwrap()).is_err());
     let second = prepare_subtitle(source.to_str().unwrap()).unwrap();
     assert_ne!(second.backup_path, prepared.backup_path);
     assert!(
@@ -51,6 +64,51 @@ fn preparation_preserves_timestamped_backups_and_edits_original() {
             .unwrap()
             .contains("Translated")
     );
+}
+
+#[test]
+fn each_edit_keeps_the_previous_version_in_autosave() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("episode.ass");
+    let original = "[Events]\nFormat: Start, End, Style, Text\nDialogue: 0:00:01.00,0:00:02.00,Default,Original\n";
+    fs::write(&source, original).unwrap();
+    let revision = Document::open(&source).unwrap().revision;
+    let first = replace_text(source.to_str().unwrap(), 1, &revision, "First").unwrap();
+    let first_content = fs::read_to_string(&source).unwrap();
+    let second = replace_text(source.to_str().unwrap(), 1, &first.revision, "Second").unwrap();
+
+    assert_eq!(fs::read_to_string(&first.autosave_path).unwrap(), original);
+    assert_eq!(
+        fs::read_to_string(&second.autosave_path).unwrap(),
+        first_content
+    );
+    assert_ne!(first.autosave_path, second.autosave_path);
+    assert!(fs::read_to_string(&source).unwrap().contains("Second"));
+    assert!(replace_text(source.to_str().unwrap(), 1, &revision, "Stale").is_err());
+    let count = fs::read_dir(dir.path().join(".autosave"))
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".AUTOSAVE.ass")
+        })
+        .count();
+    assert_eq!(count, 2);
+}
+
+#[test]
+fn editing_fails_without_a_safe_autosave_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("episode.ass");
+    let original = "[Events]\nFormat: Start, End, Style, Text\nDialogue: 0:00:01.00,0:00:02.00,Default,Original\n";
+    fs::write(&source, original).unwrap();
+    fs::write(dir.path().join(".autosave"), "not a directory").unwrap();
+    let revision = Document::open(&source).unwrap().revision;
+
+    assert!(replace_text(source.to_str().unwrap(), 1, &revision, "Changed").is_err());
+    assert_eq!(fs::read_to_string(&source).unwrap(), original);
 }
 
 #[test]
@@ -103,6 +161,12 @@ fn ass_creation_rejects_invalid_options_without_creating_output() {
     options.title = "Bad\nTitle".into();
     assert!(create_ass(destination.to_str().unwrap(), &options).is_err());
     assert!(!destination.exists());
+    options.title = "Untitled".into();
+    let autosave = dir.path().join(".autosave");
+    fs::create_dir(&autosave).unwrap();
+    let inside_autosave = autosave.join("translation.ass");
+    assert!(create_ass(inside_autosave.to_str().unwrap(), &options).is_err());
+    assert!(!inside_autosave.exists());
 }
 
 #[test]
@@ -137,6 +201,10 @@ fn inserts_srt_cues_into_created_ass_and_then_translates_them() {
         "こんにちは、世界。\\N二行目"
     );
     assert_eq!(inserted.source_revision, hash(original.as_bytes()));
+    assert_eq!(
+        hash(&fs::read(&inserted.autosave_path).unwrap()),
+        created.revision
+    );
     assert_eq!(fs::read_to_string(&source).unwrap(), original);
     let output = fs::read_to_string(&destination).unwrap();
     assert!(
@@ -642,7 +710,9 @@ fn srt_multiline_edit_preserves_timing_bom_and_line_endings() {
     );
     assert!(replace_text(name, 1, &before.revision, "Bad\n\ncue").is_err());
     assert_eq!(fs::read_to_string(&path).unwrap(), original);
-    replace_text(name, 1, &before.revision, "New\nWords").unwrap();
+    let edited = replace_text(name, 1, &before.revision, "New\nWords").unwrap();
+    assert!(edited.autosave_path.ends_with("Z.AUTOSAVE.srt"));
+    assert_eq!(fs::read_to_string(&edited.autosave_path).unwrap(), original);
     assert_eq!(
         fs::read_to_string(&path).unwrap(),
         original.replace("First line\r\nSecond line", "New\r\nWords")

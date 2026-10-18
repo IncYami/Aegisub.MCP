@@ -1,6 +1,6 @@
 # Aegisub MCP
 
-A local MCP server written in Rust for reading and editing ASS `Dialogue` events and simple SRT/WebVTT cues. ASS remains the primary format. The server shows subtitle text to the AI while hiding ASS override blocks. Before editing an existing subtitle in place, it saves the original bytes in a timestamped `.backup` file. No persistent intermediate JSON files are needed.
+A local MCP server written in Rust for reading and editing ASS `Dialogue` events and simple SRT/WebVTT cues. ASS remains the primary format. The server shows subtitle text to the AI while hiding ASS override blocks. Before editing an existing subtitle in place, it saves the original bytes in a timestamped `.backup` file. Each successful edit saves the displaced version in `.autosave`. No persistent intermediate JSON files are needed.
 
 ## Code layout
 
@@ -14,6 +14,7 @@ A local MCP server written in Rust for reading and editing ASS `Dialogue` events
 | `src/subtitle/group.rs` | Group exact visible text across a subtitle and apply one translation to every safe occurrence. |
 | `src/subtitle/timed_text.rs` | Parse simple SRT and WebVTT cues while retaining their byte ranges. |
 | `src/subtitle/backup.rs` | Create a timestamped backup before registering an existing subtitle for in-place edits. |
+| `src/subtitle/autosave.rs` | Serialize writes across MCP processes and preserve the displaced subtitle version during an atomic exchange. |
 | `src/subtitle/ass_creation.rs` | Create an empty ASS script with a configurable base style. |
 | `src/subtitle/event_import.rs` | Copy source subtitle cues into ASS Dialogue events. |
 | `src/subtitle/font_collect.rs` | Find installed ASS fonts, check glyph and style availability, and copy original files with organized names. |
@@ -61,13 +62,13 @@ nix-build -E 'let pkgs = import <nixpkgs> {}; in pkgs.callPackage ./default.nix 
 
 ## Version control
 
-The `main` branch tracks the Rust source, Nix shell, Cargo manifests, documentation, project instructions, and the neutral-named ASS test fixture in `tests/fixtures/sample.ass`. Build output, Nix results, backup directories, personal `rev.txt`, and root-level subtitle files are ignored. Subtitle files are excluded from Git line-ending normalization so the fixture keeps its original bytes.
+The `main` branch tracks the Rust source, Nix shell, Cargo manifests, documentation, project instructions, and the neutral-named ASS test fixture in `tests/fixtures/sample.ass`. Build output, Nix results, backup and autosave directories, personal `rev.txt`, and root-level subtitle files are ignored. Subtitle files are excluded from Git line-ending normalization so the fixture keeps its original bytes.
 
 Before committing Rust changes, run `nix-shell --run 'cargo fmt && cargo clippy --all-targets -- -D warnings && cargo test'`.
 
 ## Available tools
 
-- `prepare_subtitle`: back up an existing ASS, SSA, SRT, or WebVTT subtitle before editing it in place. Pass `source_path`. The tool creates `.backup/` beside the subtitle and saves a file named like `episode.2026-10-08T14-30-15.123456789Z.ass`. It returns `editable_path`, `backup_path`, and the current revision. Existing backups are never overwritten.
+- `prepare_subtitle`: back up an existing ASS, SSA, SRT, or WebVTT subtitle before editing it in place. Pass `source_path`. The tool creates `.backup/` beside the subtitle and saves a file named like `episode.2026-10-08T14-30-15.123456789Z.BACKUP.ass`. It returns `editable_path`, `backup_path`, and the current revision. Existing backups are never overwritten.
 - `create_ass`: create an empty `.ass` with a complete base script and style. Pass a new `destination_path` and optionally `title`, `play_res_x`, `play_res_y`, `font_name`, and `font_size`. Existing files are never overwritten. The result includes `working_path` and its initial revision.
 - `get_style_guide`: read the project style guide through MCP before choosing a font or planning typesetting. It is read-only and returns the versioned guide in `docs/subtitle-style-guide.md`.
 - `collect_fonts`: inspect fonts used by an ASS subtitle and copy their installed files. Pass `ass_path` and optionally `destination_path`. By default, it creates a `fonts/` directory beside the ASS. It reads style fonts and inline `\\fn`, `\\b`, and `\\i` overrides, checks characters against fontconfig coverage, and reports missing fonts, glyphs, or requested bold/italic faces in structured warnings. It copies each selected TTF, OTF, TTC, or OTC file unchanged, including variable fonts and collections. Files use organized names such as `Lato-Bold.ttf` or `Inter-Variable.ttf`. Existing files are never overwritten; a content hash is added to the name if a different file already uses it.
@@ -80,7 +81,9 @@ Before committing Rust changes, run `nix-shell --run 'cargo fmt && cargo clippy 
 - `replace_segment`: replace one unique piece of text inside an event or cue without resending its full text. It requires `path`, `id`, `expected_revision`, `old_text`, and `new_text`. In regular ASS events, the matched text must stay within one visible text segment and cannot cross an override block. Supported gradients are rebuilt after replacement. Repeated matches are rejected.
 - `replace_text_batch`: validate and replace several events or cues in one file under one revision. If any edit fails, the file is left untouched. Duplicate IDs are rejected.
 
-To edit an existing subtitle, call `prepare_subtitle` and use its `editable_path` for subsequent operations. The original path remains the active subtitle; its pre-edit contents are preserved in `backup_path`. To start a blank ASS project, call `create_ass` and use its `working_path`. After a server restart, call `prepare_subtitle` again before editing an existing file; this creates another dated backup of its current contents. Files inside `.backup` cannot be prepared for editing.
+To edit an existing subtitle, call `prepare_subtitle` and use its `editable_path` for subsequent operations. The original path remains the active subtitle; its pre-edit contents are preserved in `backup_path`. To start a blank ASS project, call `create_ass` and use its `working_path`. After a server restart, call `prepare_subtitle` again before editing an existing file; this creates another dated backup of its current contents. Files inside `.backup` or `.autosave` cannot be prepared for editing.
+
+Each successful text edit or event import returns `autosave_path`. The file at that path is the complete subtitle version displaced by the edit, named like `.autosave/episode.2026-10-08T14-35-02.456789123Z.AUTOSAVE.ass`. The active subtitle contains the new version. Autosaves are created for both prepared subtitles and newly created ASS working files; existing autosaves are never overwritten. An interprocess lock serializes MCP writes to one subtitle. On Linux, an atomic exchange preserves the version present at the original path at commit time. If another program saved a different version after the MCP read it, the operation reports a revision conflict and retains both versions; when safe, it restores the external version to the active path. Other programs need not honor the MCP lock, so concurrent external writes still require review. Autosaves do not expire automatically.
 
 ## Creating an ASS base
 
@@ -151,7 +154,7 @@ The tool copies each cue's timing and text to a new `Dialogue` event using the d
 
 Alignment accepts matching intervals or substantial overlaps. Without overlap, it uses proximity only when one candidate is clearly closer. Context occurrences remain separate even when their text is identical.
 
-The server preserves all unrelated file bytes, including BOM, line endings, styles, comments, cue identifiers, and attachments. Writes use a temporary file in the same directory. Edit tools reject unregistered files; an existing subtitle becomes editable only after its backup succeeds. Backups are stored in UTC with nanosecond timestamps and cannot be edited through the MCP. Non-UTF-8 files, ASS `\p` drawings, unsupported per-character effects, and ASS edits that remove `\N`, `\n`, or `\h` escapes are rejected. SRT/WebVTT cues with inline markup or character entities are read-only in this initial support; plain cue text is editable. WebVTT files with `X-TIMESTAMP-MAP` are rejected because their cue times require an additional mapping.
+The server preserves all unrelated file bytes, including BOM, line endings, styles, comments, cue identifiers, and attachments. Writes exchange a prepared file with the active subtitle. Edit tools reject unregistered files; an existing subtitle becomes editable only after its backup succeeds. Backups and autosaves use UTC timestamps with nanosecond precision and cannot be edited through the MCP. Non-UTF-8 files, ASS `\p` drawings, unsupported per-character effects, and ASS edits that remove `\N`, `\n`, or `\h` escapes are rejected. SRT/WebVTT cues with inline markup or character entities are read-only in this initial support; plain cue text is editable. WebVTT files with `X-TIMESTAMP-MAP` are rejected because their cue times require an additional mapping.
 
 Supported gradients use numeric, color, or alpha tags. Animated gradients are editable only when every character has a matching `\t(...)` transform with consistent timing and tag names. Other transform patterns remain read-only.
 

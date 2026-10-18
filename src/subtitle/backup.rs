@@ -6,7 +6,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-fn utc_timestamp(now: SystemTime) -> Result<String> {
+pub(super) fn utc_timestamp(now: SystemTime) -> Result<String> {
     let elapsed = now
         .duration_since(UNIX_EPOCH)
         .map_err(|_| error("System clock predates the Unix epoch"))?;
@@ -40,9 +40,11 @@ pub fn prepare_subtitle(source: &str) -> Result<PreparedSubtitleResult> {
         .map_err(|e| error(format!("Cannot resolve source subtitle: {e}")))?;
     if source_path
         .components()
-        .any(|component| component.as_os_str() == ".backup")
+        .any(|component| component.as_os_str() == ".backup" || component.as_os_str() == ".autosave")
     {
-        return Err(error("Files inside .backup cannot be prepared for editing"));
+        return Err(error(
+            "Files inside .backup or .autosave cannot be prepared for editing",
+        ));
     }
     let document = Document::open(&source_path)?;
     let parent = source_path.parent().expect("canonical path has parent");
@@ -58,14 +60,6 @@ pub fn prepare_subtitle(source: &str) -> Result<PreparedSubtitleResult> {
         }
         Err(e) => return Err(error(format!("Cannot inspect backup directory: {e}"))),
     }
-    let stem = source_path
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or("subtitle");
-    let extension = source_path
-        .extension()
-        .and_then(|value| value.to_str())
-        .expect("Document::open validated the extension");
     let stamp = utc_timestamp(SystemTime::now())?;
     let mut temporary = tempfile::Builder::new()
         .prefix(".subtitle-backup-")
@@ -94,12 +88,12 @@ pub fn prepare_subtitle(source: &str) -> Result<PreparedSubtitleResult> {
     let backup_path = {
         let mut collision = 0;
         loop {
-            let suffix = if collision == 0 {
-                String::new()
-            } else {
-                format!("-{collision}")
-            };
-            let path = backup_dir.join(format!("{stem}.{stamp}{suffix}.{extension}"));
+            let path = backup_dir.join(versioned_filename(
+                &source_path,
+                &stamp,
+                "BACKUP",
+                collision,
+            ));
             match temporary.persist_noclobber(&path) {
                 Ok(_) => break path,
                 Err(e) if e.error.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -119,6 +113,28 @@ pub fn prepare_subtitle(source: &str) -> Result<PreparedSubtitleResult> {
         revision: document.revision,
         total_events: document.events.len(),
     })
+}
+
+pub(super) fn versioned_filename(
+    source_path: &std::path::Path,
+    stamp: &str,
+    marker: &str,
+    collision: usize,
+) -> String {
+    let stem = source_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("subtitle");
+    let extension = source_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .expect("Subtitle extension was validated");
+    let suffix = if collision == 0 {
+        String::new()
+    } else {
+        format!("-{collision}")
+    };
+    format!("{stem}.{stamp}{suffix}.{marker}.{extension}")
 }
 
 #[cfg(test)]

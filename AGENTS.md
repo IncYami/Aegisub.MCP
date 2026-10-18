@@ -24,6 +24,7 @@ This project implements a Rust MCP server for reading and editing subtitles dire
 - `src/subtitle/group.rs` groups exact visible text across all events, independent of style or timing, and applies one translation atomically to safe group members.
 - `src/subtitle/timed_text.rs` parses SRT and WebVTT cues.
 - `src/subtitle/backup.rs` creates timestamped backups in a sibling `.backup` directory before the MCP layer authorizes edits to an existing subtitle.
+- `src/subtitle/autosave.rs` serializes edits across server processes and keeps the displaced subtitle in a sibling `.autosave` directory whenever an edit succeeds.
 - `src/subtitle/ass_creation.rs` creates empty ASS working files with a configurable base script and Default style.
 - `src/subtitle/event_import.rs` inserts source subtitle events into an ASS working file without changing the source.
 - `src/subtitle/font_collect.rs` tracks font usage in ASS styles and inline tags, inspects installed faces, reports missing glyphs and bold/italic variants, and copies original font files with organized names without overwriting existing files. Do not convert, subset, or split font files in the MCP.
@@ -38,7 +39,7 @@ This project implements a Rust MCP server for reading and editing subtitles dire
 - If an edit cannot preserve the structure safely, return an explicit error instead of writing an approximation.
 - Re-read the file and detect concurrent changes before writing. Validate an entire batch before writing any edit.
 - Do not overwrite `tests/fixtures/sample.ass`. Use temporary copies in tests.
-- Require a successful backup before registering an existing subtitle for in-place MCP edits. Edit tools must accept only files registered in the current server session. Never edit a file inside `.backup`.
+- Require a successful backup before registering an existing subtitle for in-place MCP edits. Edit tools must accept only files registered in the current server session. Never edit a file inside `.backup` or `.autosave`.
 
 ## References
 

@@ -1,9 +1,10 @@
 use super::ass::{hash, is_drawing, split_tags};
+use super::autosave::{lock_for_edit, write_with_autosave};
 use super::context::parse_ass_time;
 use super::edit::EDIT_LOCK;
 use super::query::view;
 use super::{Document, InsertEventsResult, Result, SubtitleFormat, error, timed_text};
-use std::{collections::HashSet, fs, io::Write, path::Path};
+use std::{collections::HashSet, fs, path::Path};
 
 const EVENT_FORMAT: &str =
     "Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text";
@@ -152,6 +153,7 @@ pub fn insert_events_from_source(
     let _guard = EDIT_LOCK
         .lock()
         .map_err(|_| error("Edit lock is unavailable"))?;
+    let _file_lock = lock_for_edit(&destination_path)?;
     let destination_doc = Document::open(&destination_path)?;
     if destination_doc.revision != expected_revision {
         return Err(error(
@@ -177,38 +179,12 @@ pub fn insert_events_from_source(
     output.push_str(&inserted);
     output.push_str(&destination_doc.content[insertion..]);
 
-    let parent = destination_path
-        .parent()
-        .expect("canonical path has parent");
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)
-        .map_err(|e| error(format!("Cannot create temporary file: {e}")))?;
-    temporary
-        .as_file()
-        .set_permissions(
-            fs::metadata(&destination_path)
-                .map_err(|e| error(format!("Cannot read destination permissions: {e}")))?
-                .permissions(),
-        )
-        .map_err(|e| error(format!("Cannot preserve destination permissions: {e}")))?;
-    temporary
-        .write_all(output.as_bytes())
-        .map_err(|e| error(format!("Cannot write destination ASS: {e}")))?;
-    temporary
-        .as_file()
-        .sync_all()
-        .map_err(|e| error(format!("Cannot sync destination ASS: {e}")))?;
-    let current_destination = fs::read(&destination_path)
-        .map_err(|e| error(format!("Cannot recheck destination ASS: {e}")))?;
     let current_source = fs::read(&source_path)
         .map_err(|e| error(format!("Cannot recheck source subtitle: {e}")))?;
-    if hash(&current_destination) != destination_doc.revision
-        || hash(&current_source) != source_doc.revision
-    {
-        return Err(error("Source or destination changed during insertion"));
+    if hash(&current_source) != source_doc.revision {
+        return Err(error("Source changed during insertion"));
     }
-    temporary
-        .persist(&destination_path)
-        .map_err(|e| error(format!("Cannot save destination ASS: {e}")))?;
+    let autosave_path = write_with_autosave(&destination_path, &destination_doc.revision, &output)?;
     let updated = Document::open(Path::new(&destination_path))?;
     let first_id = destination_doc.events.len() + 1;
     let events = (first_id..first_id + lines.len())
@@ -223,6 +199,7 @@ pub fn insert_events_from_source(
     Ok(InsertEventsResult {
         previous_revision: destination_doc.revision,
         revision: hash(output.as_bytes()),
+        autosave_path: autosave_path.display().to_string(),
         source_revision: source_doc.revision,
         events,
     })
