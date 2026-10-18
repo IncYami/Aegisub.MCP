@@ -9,6 +9,12 @@ This project implements a Rust MCP server for reading and editing subtitles dire
 - Keep ASS parsing and editing logic separate from the MCP layer.
 - Keep code comments, documentation, tool descriptions, and project messages in en-US. Chat with the user in pt-BR.
 
+## Git and versioning
+
+- After completing any project change, commit it and push the updated `main` branch to `origin`. Do not leave completed changes only in the local working tree.
+- Every commit that changes Rust application code must also increase the package version in `Cargo.toml` and update `Cargo.lock` in the same commit. Use semantic versioning: increase the patch number for fixes or internal changes, the minor number for new functionality while the project is in `0.x`, and the major number for incompatible changes after `1.0.0`.
+- Documentation-only, instruction-only, and Nix packaging-only changes do not require an application version increase.
+
 ## Layout
 
 - `src/subtitle/ass.rs` handles ASS syntax and preservation of the original structure.
