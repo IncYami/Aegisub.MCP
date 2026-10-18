@@ -17,6 +17,7 @@ A local MCP server written in Rust for reading and editing ASS `Dialogue` events
 | `src/subtitle/autosave.rs` | Serialize writes across MCP processes and preserve the displaced subtitle version during an atomic exchange. |
 | `src/subtitle/ass_creation.rs` | Create an empty ASS script with a configurable base style. |
 | `src/subtitle/event_import.rs` | Copy source subtitle cues into ASS Dialogue events. |
+| `src/subtitle/direct_events.rs` | Validate and create ASS Dialogue events from raw timing and text fields. |
 | `src/subtitle/font_collect.rs` | Find installed ASS fonts, check glyph and style availability, and copy original files with organized names. |
 | `src/subtitle.rs` | Shared types and interfaces between subtitle modules. |
 | `src/mcp.rs` | Expose operations as MCP tools. |
@@ -73,6 +74,7 @@ Before committing Rust changes, run `nix-shell --run 'cargo fmt && cargo clippy 
 - `get_style_guide`: read the project style guide through MCP before choosing a font or planning typesetting. It is read-only and returns the versioned guide in `docs/subtitle-style-guide.md`.
 - `collect_fonts`: inspect fonts used by an ASS subtitle and copy their installed files. Pass `ass_path` and optionally `destination_path`. By default, it creates a `fonts/` directory beside the ASS. It reads style fonts and inline `\\fn`, `\\b`, and `\\i` overrides, checks characters against fontconfig coverage, and reports missing fonts, glyphs, or requested bold/italic faces in structured warnings. It copies each selected TTF, OTF, TTC, or OTC file unchanged, including variable fonts and collections. Files use organized names such as `Lato-Bold.ttf` or `Inter-Variable.ttf`. Existing files are never overwritten; a content hash is added to the name if a different file already uses it.
 - `insert_events_from_source`: insert source events into an ASS working file. Pass `destination_path`, its current `expected_revision`, `source_path`, and one or more `source_ids`. The source may be ASS, SRT, or WebVTT. The source is never changed; all requested events are inserted together or none are inserted.
+- `create_ass_events`: create Dialogue events directly in an editable ASS working file. Pass `destination_path`, its current `expected_revision`, and an `events` array. Each event requires `start` and `end` in `h:mm:ss.cc` form plus raw ASS `text`; optional `style` defaults to `Default`, with optional `layer`, `name`, `margin_l`, `margin_r`, `margin_v`, and `effect`. The destination Events `Format:` line controls field order. All entries are validated before any write, and text may include commas, `\\N`, `\\h`, and override tags.
 - `list_events`: paginate ASS events or SRT/WebVTT cues and search visible text.
 - `list_text_groups`: paginate exact visible-text groups across an entire ASS, SRT, or WebVTT file. Each distinct text appears once, including single occurrences. Members retain their IDs, times, and styles; grouping ignores ASS override tags and does not require nearby lines. The result indicates whether one translation can be applied automatically to every member.
 - `get_event`: read an event or cue by its 1-based ID. Source text is returned only with `include_raw: true`.
@@ -125,7 +127,7 @@ After the ASS has its final fonts, call `collect_fonts`:
 
 The destination is optional; without it, the tool uses `fonts/` beside the ASS. On NixOS, it uses fontconfig's installed-font index, so fonts in the Nix store can be copied into the project. The result lists required family names, each copied or already-present file, and warnings about missing fonts, glyphs, or requested bold/italic faces. The tool names files from font metadata and copies original bytes. Collections and variable fonts remain collections and variable fonts. It matches installed family or full names exactly instead of silently accepting fontconfig substitutions. The operation does not convert, subset, or embed fonts in an MKV; the project's muxing workflow can handle those steps. Font licenses still apply when distributing copied files.
 
-`create_ass` creates the base document. To pull lines from a Japanese SRT into it, call `list_events` on the SRT, then `insert_events_from_source` with the returned cue IDs and the new ASS revision:
+`create_ass` creates the base document. Use `create_ass_events` to create Dialogue events directly, or pull lines from a Japanese SRT by calling `list_events` on the SRT, then `insert_events_from_source` with the returned cue IDs and the new ASS revision:
 
 ```json
 {
@@ -162,6 +164,6 @@ Gradient reconstruction uses the event style color when the first character has 
 
 ## Project status
 
-Event reading, individual and batch editing, exact repeated-text grouping, empty ASS creation, source-event insertion, mixed-format temporal context alignment, and supported per-character gradient reconstruction are implemented. Remaining work includes creating events without a source subtitle, more typesetting effects, inline markup editing for SRT/WebVTT, and visual rendering checks. The real-world ASS fixture in `tests/fixtures/sample.ass` is used only through temporary copies in editing tests.
+Event reading, individual and batch editing, exact repeated-text grouping, empty ASS creation, direct ASS event creation, source-event insertion, mixed-format temporal context alignment, and supported per-character gradient reconstruction are implemented. Remaining work includes more typesetting effects, inline markup editing for SRT/WebVTT, and visual rendering checks. The real-world ASS fixture in `tests/fixtures/sample.ass` is used only through temporary copies in editing tests.
 
 Syntax references: [libass ASS format guide](https://github.com/libass/libass/wiki/ASS-File-Format-Guide) and [Aegisub override tag manual](https://aegisub.org/docs/latest/ass_tags/).

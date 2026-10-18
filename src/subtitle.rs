@@ -7,6 +7,7 @@ mod automation;
 mod autosave;
 mod backup;
 mod context;
+mod direct_events;
 mod edit;
 mod event_import;
 mod font_collect;
@@ -16,6 +17,7 @@ mod timed_text;
 
 pub use ass_creation::create_ass;
 pub use backup::prepare_subtitle;
+pub use direct_events::{NewAssEvent, create_ass_events};
 pub use edit::{replace_segment, replace_text, replace_text_batch};
 pub use event_import::insert_events_from_source;
 pub use font_collect::collect_fonts;

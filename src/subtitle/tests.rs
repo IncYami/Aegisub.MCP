@@ -7,6 +7,86 @@ fn ass_fixture() -> std::path::PathBuf {
     std::path::PathBuf::from("tests/fixtures/sample.ass")
 }
 
+fn direct_event(start: &str, end: &str, text: &str) -> NewAssEvent {
+    NewAssEvent {
+        start: start.to_owned(),
+        end: end.to_owned(),
+        text: text.to_owned(),
+        style: None,
+        layer: None,
+        name: None,
+        margin_l: None,
+        margin_r: None,
+        margin_v: None,
+        effect: None,
+    }
+}
+
+#[test]
+fn direct_ass_event_creation_uses_reordered_format_and_preserves_tags() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("direct.ass");
+    let original = "\u{feff}[Script Info]\r\nTitle: direct\r\n[V4+ Styles]\r\nFormat: Name, Fontname, Fontsize\r\nStyle: Default,Arial,20\r\n[Events]\r\nFormat: Start, End, Style, Layer, Name, MarginL, MarginR, MarginV, Effect, Text\r\nComment: untouched\r\n";
+    fs::write(&path, original).unwrap();
+    let revision = super::ass::hash(original.as_bytes());
+    let mut event = direct_event(
+        "0:00:01.20",
+        "0:00:02.30",
+        "{\\unknownTag7}Hello, world\\Nnext",
+    );
+    event.layer = Some("2".to_owned());
+    event.name = Some("actor".to_owned());
+    event.margin_l = Some("10".to_owned());
+    event.margin_r = Some("20".to_owned());
+    event.margin_v = Some("30".to_owned());
+    event.effect = Some("Banner;3;0;100".to_owned());
+    let result = create_ass_events(path.to_str().unwrap(), &revision, &[event]).unwrap();
+    assert_eq!(result.events.len(), 1);
+    assert_eq!(result.events[0].id, 1);
+    assert_eq!(
+        result.events[0].raw_text.as_deref(),
+        Some("{\\unknownTag7}Hello, world\\Nnext")
+    );
+    let contents = fs::read_to_string(path).unwrap();
+    assert!(contents.contains("Dialogue: 0:00:01.20,0:00:02.30,Default,2,actor,10,20,30,Banner;3;0;100,{\\unknownTag7}Hello, world\\Nnext\r\n"));
+    assert!(contents.starts_with('\u{feff}'));
+    assert!(contents.contains("Comment: untouched\r\n"));
+}
+
+#[test]
+fn direct_ass_event_creation_rejects_invalid_batch_and_stale_revision_without_writing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("direct.ass");
+    let original = "[V4+ Styles]\nFormat: Name, Fontname\nStyle: Default,Arial\n[Events]\nFormat: Layer, Start, End, Style, Text\n";
+    fs::write(&path, original).unwrap();
+    let revision = super::ass::hash(original.as_bytes());
+    let valid = direct_event("0:00:01.00", "0:00:02.00", "Valid");
+    let invalid = direct_event("0:00:02.00", "0:00:03.00", "nested {a{b}} and unmatched }");
+    assert!(create_ass_events(path.to_str().unwrap(), &revision, &[valid, invalid]).is_err());
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
+    let event = direct_event("0:00:01.00", "0:00:02.00", "Valid");
+    assert!(create_ass_events(path.to_str().unwrap(), "stale", &[event]).is_err());
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
+
+    let mut negative_layer = direct_event("0:00:01.00", "0:00:02.00", "Negative layer");
+    negative_layer.layer = Some("-1".to_owned());
+    assert!(create_ass_events(path.to_str().unwrap(), &revision, &[negative_layer]).is_err());
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
+}
+
+#[test]
+fn direct_ass_event_creation_rejects_supplied_field_missing_from_format() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("direct.ass");
+    let original = "[V4+ Styles]\nFormat: Name, Fontname\nStyle: Default,Arial\n[Events]\nFormat: Start, End, Style, Text\n";
+    fs::write(&path, original).unwrap();
+    let revision = super::ass::hash(original.as_bytes());
+    let mut event = direct_event("0:00:01.00", "0:00:02.00", "Has name");
+    event.name = Some("Actor".to_owned());
+    assert!(create_ass_events(path.to_str().unwrap(), &revision, &[event]).is_err());
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
+}
+
 #[test]
 fn edit_preserves_unrelated_bytes_and_tags() {
     let dir = tempfile::tempdir().unwrap();

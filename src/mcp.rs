@@ -167,6 +167,34 @@ struct InsertEventsArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct CreateAssEventArgs {
+    start: String,
+    end: String,
+    text: String,
+    #[serde(default)]
+    style: Option<String>,
+    #[serde(default)]
+    layer: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    margin_l: Option<String>,
+    #[serde(default)]
+    margin_r: Option<String>,
+    #[serde(default)]
+    margin_v: Option<String>,
+    #[serde(default)]
+    effect: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct CreateAssEventsArgs {
+    destination_path: String,
+    expected_revision: String,
+    events: Vec<CreateAssEventArgs>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct CollectFontsArgs {
     ass_path: String,
     #[serde(default)]
@@ -297,6 +325,39 @@ impl SubtitleServer {
     }
 
     #[tool(
+        description = "Create one or more Dialogue events directly in an editable ASS subtitle prepared by prepare_subtitle or created by create_ass. Pass destination_path, expected_revision, and an events array with start and end in h:mm:ss.cc format plus raw ASS text. Style defaults to Default; layer, name, margins, and effect are optional. Text may contain commas and valid ASS override tags, including unknown tags, but must remain on one physical line. All events are validated and written atomically using the destination Events Format field order. Returns created events, the new revision, and autosave_path."
+    )]
+    fn create_ass_events(
+        &self,
+        Parameters(args): Parameters<CreateAssEventsArgs>,
+    ) -> CallToolResult {
+        if let Err(message) = self.require_editable_file(&args.destination_path) {
+            return tool_error(message);
+        }
+        let events = args
+            .events
+            .into_iter()
+            .map(|event| subtitle::NewAssEvent {
+                start: event.start,
+                end: event.end,
+                text: event.text,
+                style: event.style,
+                layer: event.layer,
+                name: event.name,
+                margin_l: event.margin_l,
+                margin_r: event.margin_r,
+                margin_v: event.margin_v,
+                effect: event.effect,
+            })
+            .collect::<Vec<_>>();
+        tool_result(subtitle::create_ass_events(
+            &args.destination_path,
+            &args.expected_revision,
+            &events,
+        ))
+    }
+
+    #[tool(
         description = "List ASS Dialogue events or plain SRT/WebVTT cues. Use offset and limit for pagination; optionally filter visible text with query. Optional context tracks in ASS, SRT or WebVTT align by time. Each result includes the current file revision."
     )]
     fn list_events(&self, Parameters(args): Parameters<ListArgs>) -> CallToolResult {
@@ -415,7 +476,7 @@ impl ServerHandler for SubtitleServer {
                 env!("CARGO_PKG_NAME"),
                 env!("CARGO_PKG_VERSION"),
             ))
-            .with_instructions("Read ASS, SRT or WebVTT subtitles and align optional context tracks. ASS is the primary format. Call get_style_guide before choosing a font or planning typesetting. Keep Dialogue events on the Default style and use local override tags for typesetting. To start an empty ASS script, call create_ass, then insert_events_from_source to copy cues from another subtitle. Before editing an existing subtitle, call prepare_subtitle to save a timestamped backup in .backup. Use the returned editable_path for edits to the original file. Each successful edit preserves the displaced subtitle in .autosave and returns autosave_path. Fetch a current revision before every edit. For translation, list_text_groups can present identical visible text once across dialogue and signs; use replace_text_group to apply one translation to all safe occurrences. Once font choices are final, collect installed font files with collect_fonts.")
+            .with_instructions("Read ASS, SRT or WebVTT subtitles and align optional context tracks. ASS is the primary format. Call get_style_guide before choosing a font or planning typesetting. Keep Dialogue events on the Default style and use local override tags for typesetting. To start an empty ASS script, call create_ass, then create_ass_events to write Dialogue events directly or insert_events_from_source to copy cues from another subtitle. Before editing an existing subtitle, call prepare_subtitle to save a timestamped backup in .backup. Use the returned editable_path for edits to the original file. Each successful edit preserves the displaced subtitle in .autosave and returns autosave_path. Fetch a current revision before every edit. For translation, list_text_groups can present identical visible text once across dialogue and signs; use replace_text_group to apply one translation to all safe occurrences. Once font choices are final, collect installed font files with collect_fonts.")
     }
 }
 
@@ -668,6 +729,69 @@ mod tests {
             fs::read_to_string(&destination)
                 .unwrap()
                 .contains("こんにちは")
+        );
+    }
+
+    #[test]
+    fn mcp_creates_ass_events_only_in_registered_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("new.ass");
+        let server = SubtitleServer::default();
+        let created = server.create_ass(Parameters(CreateAssArgs {
+            destination_path: destination.display().to_string(),
+            title: "Untitled".into(),
+            play_res_x: 1920,
+            play_res_y: 1080,
+            font_name: "Lato".into(),
+            font_size: None,
+        }));
+        assert_ne!(created.is_error, Some(true));
+        let created = created.structured_content.unwrap();
+        let working = created["working_path"].as_str().unwrap().to_owned();
+        let revision = created["revision"].as_str().unwrap().to_owned();
+        let unregistered = directory.path().join("unregistered.ass");
+        fs::write(&unregistered, "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n").unwrap();
+        let denied = server.create_ass_events(Parameters(CreateAssEventsArgs {
+            destination_path: unregistered.display().to_string(),
+            expected_revision: revision.clone(),
+            events: vec![CreateAssEventArgs {
+                start: "0:00:01.00".into(),
+                end: "0:00:02.00".into(),
+                text: "Hello".into(),
+                style: None,
+                layer: None,
+                name: None,
+                margin_l: None,
+                margin_r: None,
+                margin_v: None,
+                effect: None,
+            }],
+        }));
+        assert_eq!(denied.is_error, Some(true));
+        let allowed = server.create_ass_events(Parameters(CreateAssEventsArgs {
+            destination_path: working.clone(),
+            expected_revision: revision,
+            events: vec![CreateAssEventArgs {
+                start: "0:00:01.00".into(),
+                end: "0:00:02.00".into(),
+                text: "Hello".into(),
+                style: None,
+                layer: None,
+                name: None,
+                margin_l: None,
+                margin_r: None,
+                margin_v: None,
+                effect: None,
+            }],
+        }));
+        assert_ne!(allowed.is_error, Some(true));
+        let result = allowed.structured_content.unwrap();
+        assert_eq!(result["events"][0]["id"], 1);
+        assert!(result["autosave_path"].as_str().is_some());
+        assert!(
+            fs::read_to_string(working)
+                .unwrap()
+                .contains("Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,Hello")
         );
     }
 }
