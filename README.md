@@ -35,7 +35,7 @@ cargo run
 
 ## Version control
 
-The `main` branch tracks the Rust source, Nix shell, Cargo manifests, documentation, project instructions, and the neutral-named ASS test fixture in `tests/fixtures/sample.ass`. Build output, Nix results, backup directories, the local legacy `subtitle.py`, personal `rev.txt`, and root-level subtitle files are ignored. Subtitle files are excluded from Git line-ending normalization so the fixture keeps its original bytes.
+The `main` branch tracks the Rust source, Nix shell, Cargo manifests, documentation, project instructions, and the neutral-named ASS test fixture in `tests/fixtures/sample.ass`. Build output, Nix results, backup directories, personal `rev.txt`, and root-level subtitle files are ignored. Subtitle files are excluded from Git line-ending normalization so the fixture keeps its original bytes.
 
 Before committing Rust changes, run `nix-shell --run 'cargo fmt && cargo clippy --all-targets -- -D warnings && cargo test'`.
 

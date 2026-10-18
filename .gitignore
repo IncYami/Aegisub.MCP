@@ -3,5 +3,4 @@
 /.direnv/
 .backup/
 /*.ass
-/subtitle.py
 /rev.txt

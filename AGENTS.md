@@ -36,6 +36,5 @@ This project implements a Rust MCP server for reading and editing subtitles dire
 
 ## References
 
-- If present locally, `subtitle.py` documents the former Python workflow; use it as a source of cases, not as a complete ASS specification. It is not committed.
 - `tests/fixtures/sample.ass` is a real-world test fixture committed under a neutral filename.
 - Consult the libass ASS format guide and Aegisub override tag manual when making syntax or rendering decisions.
