@@ -1,6 +1,7 @@
 use super::ass::{is_drawing, strip_blocks};
 use super::{
-    ContextMatch, ContextTrack, Document, Event, Result, SubtitleFormat, error, timed_text,
+    ContextDiagnostic, ContextMatch, ContextTrack, Document, Event, Result, SubtitleFormat, error,
+    timed_text,
 };
 use std::{
     collections::{BTreeMap, HashSet},
@@ -197,6 +198,72 @@ pub(super) fn align_tracks(
             }
         }
         result.insert(track.name.clone(), accepted);
+    }
+    result
+}
+
+pub(super) fn diagnose_tracks(
+    master: &Event,
+    tracks: &[LoadedTrack],
+    proximity_ms: u32,
+) -> BTreeMap<String, ContextDiagnostic> {
+    let selected = align_tracks(master, tracks, proximity_ms);
+    let mut result = BTreeMap::new();
+    let timing = parse_ass_time(&master.start).zip(parse_ass_time(&master.end));
+    for track in tracks {
+        let accepted = selected.get(&track.name).map(Vec::as_slice).unwrap_or(&[]);
+        let candidates = timing
+            .map(|(start, end)| {
+                let overlaps = track
+                    .events
+                    .iter()
+                    .filter(|event| event.end_ms > start && event.start_ms < end)
+                    .collect::<Vec<_>>();
+                if !overlaps.is_empty() {
+                    overlaps
+                        .into_iter()
+                        .map(|event| event.id)
+                        .collect::<Vec<_>>()
+                } else {
+                    track
+                        .events
+                        .iter()
+                        .filter(|event| {
+                            let distance = if event.end_ms <= start {
+                                start - event.end_ms
+                            } else {
+                                event.start_ms.saturating_sub(end)
+                            };
+                            distance <= u64::from(proximity_ms)
+                        })
+                        .map(|event| event.id)
+                        .collect::<Vec<_>>()
+                }
+            })
+            .unwrap_or_default();
+        let accepted_ids = accepted
+            .iter()
+            .map(|item| item.source_id)
+            .collect::<HashSet<_>>();
+        let withheld_ids = candidates
+            .iter()
+            .copied()
+            .filter(|id| !accepted_ids.contains(id))
+            .collect();
+        let status = match accepted {
+            [] if candidates.is_empty() => "no_candidate",
+            [] => "ambiguous_or_insufficient_overlap",
+            [one] => one.method,
+            _ => "multiple_matches",
+        };
+        result.insert(
+            track.name.clone(),
+            ContextDiagnostic {
+                status,
+                candidate_ids: candidates,
+                withheld_ids,
+            },
+        );
     }
     result
 }

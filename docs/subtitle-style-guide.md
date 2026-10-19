@@ -2,7 +2,8 @@
 
 ## Project convention
 
-- Keep the entire subtitle on the `Default` ASS style. For a 1920×1080 script, `create_ass` uses bold Lato 80, near-white primary text, a black 3.75 outline, a partially transparent black 2.25 shadow, bottom-center alignment, and 120/120/60 margins. The generated dimensions scale with script resolution.
+- For a new script created with `create_ass`, keep generated events on `Default` and use local override tags for typesetting. At 1920×1080 this style uses bold Lato 80, near-white primary text, a black 3.75 outline, a partially transparent black 2.25 shadow, bottom-center alignment, and 120/120/60 margins. The generated dimensions scale with script resolution.
+- When editing an existing master, preserve its event styles, layers, timing, and override tags unless the requested edit explicitly changes them. Do not normalize an established subtitle to `Default`.
 - Treat this as a dialogue baseline, not a universal visual match for signs, credits, or on-screen graphics. Confirm the video resolution and inspect a rendered frame before final delivery.
 - For typesetting, keep the event's Style field as `Default` and use local ASS override tags such as `\fn`, `\fs`, `\bord`, `\shad`, `\c`, `\pos`, and `\an` only where the image calls for them. Reset a temporary span with `\rDefault` when later text in the same event should return to the baseline. Avoid creating a separate named style for every sign or effect.
 - Choose fonts for the appearance and script of the actual text. A font used for a Japanese-looking Latin sign does not necessarily contain Japanese glyphs. Check glyph coverage and rendering before using a font. A fallback font may change spacing and appearance.
@@ -56,6 +57,7 @@ These are syntax examples, not presets. Adjust scale, position, color, outline, 
 ## MCP workflow
 
 1. Use `create_ass` for a new ASS file or `prepare_subtitle` to back up an existing ASS before editing it in place.
-2. Use `insert_events_from_source` to bring timed lines into a new ASS. Imported events use `Default`; ASS sources can retain existing inline overrides, so inspect `get_event` with `include_raw: true` when needed.
-3. Translate dialogue with `replace_text` or `replace_text_batch`. These tools preserve existing tags and do not currently add new override blocks.
-4. Apply new typesetting tags in Aegisub or with a future dedicated MCP tag-editing operation. Re-read the event and render a frame to verify the result.
+2. Use `create_ass_events` to author new timed lines, or `insert_events_from_source` to bring cues into a new ASS. Imported events use `Default`; ASS sources can retain existing inline overrides, so inspect `get_event` with `include_raw: true` when needed.
+3. Translate dialogue with `replace_text`, `replace_text_batch`, or `replace_text_group`. These tools preserve existing tags and do not add new override blocks. Group application is structural; review meaning against Japanese context as needed.
+4. Use `update_ass_events` for deliberate time, field, or raw tag edits to existing events. Fetch the current revision, validate the returned diff, and inspect the result in Aegisub or another renderer. Video frame preview is planned in `docs/visual-preview-proposal.md`.
+5. Use `audit_subtitle` against a known backup or reference version before delivery. A report is tied to the exact file hashes it compared.

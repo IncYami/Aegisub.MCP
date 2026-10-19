@@ -22,6 +22,299 @@ fn direct_event(start: &str, end: &str, text: &str) -> NewAssEvent {
     }
 }
 
+fn ass_patch(id: usize) -> AssEventPatch {
+    AssEventPatch {
+        id,
+        start: None,
+        end: None,
+        style: None,
+        layer: None,
+        name: None,
+        margin_l: None,
+        margin_r: None,
+        margin_v: None,
+        effect: None,
+        raw_text: None,
+        allow_escape_changes: false,
+    }
+}
+
+fn small_ass() -> &'static str {
+    "[Script Info]\nTitle: Test\n[V4+ Styles]\nFormat: Name, Fontname\nStyle: Default,Lato\nStyle: Sign,Lato\n[Events]\nFormat: Start, End, Style, Layer, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0:00:01.00,0:00:02.00,Default,0,,0,0,0,,Hello\\Nworld\nComment: keep this\nDialogue: 0:00:03.00,0:00:04.00,Sign,1,,0,0,0,,Second\nDialogue: 0:00:05.00,0:00:06.00,Default,0,,0,0,0,,Third\n"
+}
+
+#[test]
+fn ass_field_and_tag_updates_are_atomic_and_auditable() {
+    let dir = tempfile::tempdir().unwrap();
+    let baseline = dir.path().join("baseline.ass");
+    let active = dir.path().join("active.ass");
+    fs::write(&baseline, small_ass()).unwrap();
+    fs::write(&active, small_ass()).unwrap();
+    let revision = super::ass::hash(small_ass().as_bytes());
+    let mut valid = ass_patch(1);
+    valid.start = Some("0:00:01.20".into());
+    valid.end = Some("0:00:02.40".into());
+    valid.raw_text = Some("{\\pos(100,200)\\fnLato\\c&HFFFFFF&}Olá\\Nmundo".into());
+    let mut invalid = ass_patch(2);
+    invalid.layer = Some("-1".into());
+    assert!(update_ass_events(active.to_str().unwrap(), &revision, &[valid, invalid]).is_err());
+    assert_eq!(fs::read_to_string(&active).unwrap(), small_ass());
+    let mut invalid_tag = ass_patch(1);
+    invalid_tag.raw_text = Some("{\\pos(unknown,200)}Hello\\Nworld".into());
+    assert!(update_ass_events(active.to_str().unwrap(), &revision, &[invalid_tag]).is_err());
+    assert_eq!(fs::read_to_string(&active).unwrap(), small_ass());
+    let mut valid = ass_patch(1);
+    valid.start = Some("0:00:01.20".into());
+    valid.end = Some("0:00:02.40".into());
+    valid.raw_text = Some("{\\pos(100,200)\\fnLato\\c&HFFFFFF&}Olá\\Nmundo".into());
+    let updated = update_ass_events(active.to_str().unwrap(), &revision, &[valid]).unwrap();
+    let value = serde_json::to_value(&updated).unwrap();
+    assert_eq!(value["changes"].as_array().unwrap().len(), 3);
+    assert!(
+        fs::read_to_string(&active)
+            .unwrap()
+            .contains("Comment: keep this")
+    );
+    let policy = AuditPolicy {
+        allowed_fields: vec!["Text".into()],
+        allowed_event_ids: vec![],
+        allow_non_dialogue_changes: false,
+        allow_event_count_changes: false,
+        allow_reordering: false,
+        allow_gradient_rebuild: false,
+    };
+    let audit = audit_subtitle(
+        baseline.to_str().unwrap(),
+        active.to_str().unwrap(),
+        &revision,
+        value["revision"].as_str().unwrap(),
+        &policy,
+        0,
+        50,
+    )
+    .unwrap();
+    let report = serde_json::to_value(audit).unwrap();
+    assert_eq!(report["total_changed_events"], 1);
+    assert_eq!(report["event_order_status"], "indeterminate");
+    assert!(!report["policy_violations"].as_array().unwrap().is_empty());
+    assert_eq!(report["differences"][0]["baseline_id"], 1);
+    assert_eq!(report["differences"][0]["tags_changed"], true);
+    assert!(
+        audit_subtitle(
+            baseline.to_str().unwrap(),
+            active.to_str().unwrap(),
+            &revision,
+            "stale",
+            &policy,
+            0,
+            50
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn ass_move_delete_and_restore_preserve_other_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let active = dir.path().join("active.ass");
+    fs::write(&active, small_ass()).unwrap();
+    let revision = super::ass::hash(small_ass().as_bytes());
+    let moved = move_ass_event(active.to_str().unwrap(), &revision, 3, Some(1)).unwrap();
+    let moved_value = serde_json::to_value(&moved).unwrap();
+    let moved_revision = moved_value["revision"].as_str().unwrap();
+    let moved_text = fs::read_to_string(&active).unwrap();
+    assert!(moved_text.find("Third").unwrap() < moved_text.find("Hello").unwrap());
+    assert!(moved_text.contains("Comment: keep this"));
+    let baseline = dir.path().join("baseline.ass");
+    fs::write(&baseline, small_ass()).unwrap();
+    let policy = AuditPolicy {
+        allowed_fields: vec!["Text".into()],
+        allowed_event_ids: vec![],
+        allow_non_dialogue_changes: false,
+        allow_event_count_changes: false,
+        allow_reordering: false,
+        allow_gradient_rebuild: false,
+    };
+    let order_report = serde_json::to_value(
+        audit_subtitle(
+            baseline.to_str().unwrap(),
+            active.to_str().unwrap(),
+            &revision,
+            moved_revision,
+            &policy,
+            0,
+            50,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(order_report["event_order_status"], "changed");
+    assert_eq!(order_report["moved_events"][0]["baseline_id"], 1);
+    assert_eq!(order_report["added_ids"].as_array().unwrap().len(), 0);
+    assert_eq!(order_report["removed_ids"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        order_report["unchanged_text_ids"].as_array().unwrap().len(),
+        3
+    );
+    let reordered_filter = EventFilters {
+        changed_since_path: Some(baseline.display().to_string()),
+        changed_since_revision: Some(revision.clone()),
+        ..EventFilters::default()
+    };
+    assert!(
+        list_events_filtered(
+            active.to_str().unwrap(),
+            0,
+            20,
+            None,
+            &[],
+            500,
+            &reordered_filter
+        )
+        .is_err()
+    );
+    let deleted = delete_ass_events(active.to_str().unwrap(), moved_revision, &[2]).unwrap();
+    let deleted_value = serde_json::to_value(&deleted).unwrap();
+    assert_eq!(deleted_value["remaining_events"], 2);
+    assert!(
+        !fs::read_to_string(&active)
+            .unwrap()
+            .contains("Hello\\Nworld")
+    );
+    let moved_baseline = dir.path().join("moved-baseline.ass");
+    fs::write(&moved_baseline, &moved_text).unwrap();
+    let deletion_report = serde_json::to_value(
+        audit_subtitle(
+            moved_baseline.to_str().unwrap(),
+            active.to_str().unwrap(),
+            moved_revision,
+            deleted_value["revision"].as_str().unwrap(),
+            &policy,
+            0,
+            50,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(deletion_report["removed_ids"], serde_json::json!([2]));
+    assert_eq!(deletion_report["added_ids"], serde_json::json!([]));
+    assert!(
+        !deletion_report["policy_violations"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let restored = restore_ass_version(
+        active.to_str().unwrap(),
+        deleted_value["revision"].as_str().unwrap(),
+        deleted_value["autosave_path"].as_str().unwrap(),
+    )
+    .unwrap();
+    let restored_value = serde_json::to_value(restored).unwrap();
+    assert_eq!(restored_value["revision"], moved_revision);
+    assert_eq!(fs::read_to_string(&active).unwrap(), moved_text);
+}
+
+#[test]
+fn filtered_windows_and_context_diagnostics_report_candidates() {
+    let dir = tempfile::tempdir().unwrap();
+    let active = dir.path().join("active.ass");
+    let context = dir.path().join("context.ass");
+    fs::write(&active, small_ass()).unwrap();
+    fs::write(&context, small_ass()).unwrap();
+    let filters = EventFilters {
+        start_ms: Some(2500),
+        end_ms: Some(4500),
+        style: Some("Sign".into()),
+        include_raw: true,
+        diagnose_context: true,
+        ..EventFilters::default()
+    };
+    let track = ContextTrack {
+        name: "reference".into(),
+        path: context.display().to_string(),
+    };
+    let result = list_events_filtered(
+        active.to_str().unwrap(),
+        0,
+        20,
+        None,
+        &[track],
+        500,
+        &filters,
+    )
+    .unwrap();
+    let value = serde_json::to_value(result).unwrap();
+    assert_eq!(value["matched_events"], 1);
+    assert_eq!(value["events"][0]["id"], 2);
+    assert_eq!(value["events"][0]["raw_text"], "Second");
+    assert_eq!(
+        value["events"][0]["context_diagnostics"]["reference"]["status"],
+        "exact"
+    );
+    let changed = EventFilters {
+        changed_since_path: Some(context.display().to_string()),
+        changed_since_revision: Some(super::ass::hash(small_ass().as_bytes())),
+        ..EventFilters::default()
+    };
+    assert_eq!(
+        list_events_filtered(active.to_str().unwrap(), 0, 20, None, &[], 500, &changed)
+            .unwrap()
+            .matched_events,
+        0
+    );
+}
+
+#[test]
+fn audit_reports_other_sections_and_rejects_stale_revisions() {
+    let dir = tempfile::tempdir().unwrap();
+    let baseline = dir.path().join("baseline.ass");
+    let edited = dir.path().join("edited.ass");
+    fs::write(&baseline, small_ass()).unwrap();
+    let changed = small_ass().replace("Title: Test", "Title: Changed");
+    fs::write(&edited, &changed).unwrap();
+    let policy = AuditPolicy {
+        allowed_fields: vec!["Text".into()],
+        allowed_event_ids: vec![],
+        allow_non_dialogue_changes: false,
+        allow_event_count_changes: false,
+        allow_reordering: false,
+        allow_gradient_rebuild: false,
+    };
+    let report = serde_json::to_value(
+        audit_subtitle(
+            baseline.to_str().unwrap(),
+            edited.to_str().unwrap(),
+            &super::ass::hash(small_ass().as_bytes()),
+            &super::ass::hash(changed.as_bytes()),
+            &policy,
+            0,
+            20,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(report["non_dialogue_changed"], true);
+    assert_eq!(
+        report["non_dialogue_sections"][0]["section"],
+        "[Script Info]"
+    );
+    assert_eq!(report["total_changed_events"], 0);
+    assert!(!report["policy_violations"].as_array().unwrap().is_empty());
+    assert!(
+        audit_subtitle(
+            baseline.to_str().unwrap(),
+            edited.to_str().unwrap(),
+            "stale",
+            &super::ass::hash(changed.as_bytes()),
+            &policy,
+            0,
+            20
+        )
+        .is_err()
+    );
+}
+
 #[test]
 fn direct_ass_event_creation_uses_reordered_format_and_preserves_tags() {
     let dir = tempfile::tempdir().unwrap();
@@ -904,12 +1197,36 @@ fn edit_supported_gradient_in_copy_of_real_fixture() {
     let after = get_event_with_context(name, event.id, false, &[], 500).unwrap();
     assert_eq!(after.event.visible_text, "Teste");
     assert_eq!(fs::read(&source).unwrap(), source_doc.content.as_bytes());
-    let edited = fs::read_to_string(copy).unwrap();
+    let edited = fs::read_to_string(&copy).unwrap();
     assert_eq!(
         &edited[..event.text_range.start],
         &source_doc.content[..event.text_range.start]
     );
     assert!(edited.ends_with(&source_doc.content[event.text_range.end..]));
+    let policy = AuditPolicy {
+        allowed_fields: vec!["Text".into()],
+        allowed_event_ids: vec![event.id],
+        allow_non_dialogue_changes: false,
+        allow_event_count_changes: false,
+        allow_reordering: false,
+        allow_gradient_rebuild: true,
+    };
+    let report = serde_json::to_value(
+        audit_subtitle(
+            source.to_str().unwrap(),
+            name,
+            &source_doc.revision,
+            &hash(edited.as_bytes()),
+            &policy,
+            0,
+            20,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(report["total_changed_events"], 1);
+    assert_eq!(report["differences"][0]["gradient_rebuilt"], true);
+    assert!(report["policy_violations"].as_array().unwrap().is_empty());
 }
 
 #[test]
@@ -932,6 +1249,31 @@ fn edit_copy_of_real_fixture() {
     expected.push_str(&first.raw_text.replacen("Higasa", "Test", 1));
     expected.push_str(&source_doc.content[first.text_range.end..]);
     assert_eq!(hash(&edited), hash(expected.as_bytes()));
+    let policy = AuditPolicy {
+        allowed_fields: vec!["Text".into()],
+        allowed_event_ids: vec![1],
+        allow_non_dialogue_changes: false,
+        allow_event_count_changes: false,
+        allow_reordering: false,
+        allow_gradient_rebuild: false,
+    };
+    let report = serde_json::to_value(
+        audit_subtitle(
+            source.to_str().unwrap(),
+            name,
+            &source_doc.revision,
+            &hash(&edited),
+            &policy,
+            0,
+            20,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(report["total_changed_events"], 1);
+    assert_eq!(report["non_dialogue_changed"], false);
+    assert_eq!(report["event_order_status"], "unchanged_by_non_text_fields");
+    assert!(report["policy_violations"].as_array().unwrap().is_empty());
 }
 
 #[test]

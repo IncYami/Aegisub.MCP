@@ -19,7 +19,7 @@ pub struct NewAssEvent {
     pub effect: Option<String>,
 }
 
-fn validate_time(value: &str, name: &str) -> Result<u64> {
+pub(super) fn validate_time(value: &str, name: &str) -> Result<u64> {
     let valid_shape = value.split_once(':').is_some_and(|(hours, rest)| {
         !hours.is_empty()
             && hours.bytes().all(|byte| byte.is_ascii_digit())
@@ -38,7 +38,7 @@ fn validate_time(value: &str, name: &str) -> Result<u64> {
     parse_ass_time(value).ok_or_else(|| error(format!("Invalid ASS {name} time")))
 }
 
-fn valid_text(text: &str) -> Result<()> {
+pub(super) fn valid_text(text: &str) -> Result<()> {
     if text.contains(['\r', '\n']) || text.chars().any(char::is_control) {
         return Err(error(
             "ASS text must not contain physical line breaks or control characters",
@@ -56,6 +56,43 @@ fn valid_text(text: &str) -> Result<()> {
     }
     if in_block {
         return Err(error("ASS text contains an unclosed override block"));
+    }
+    let mut rest = text;
+    while let Some(start) = rest.find('{') {
+        let after = &rest[start + 1..];
+        let end = after
+            .find('}')
+            .ok_or_else(|| error("Unclosed ASS override block"))?;
+        let block = &after[..end];
+        for (tag, accepted) in [("pos", &[2][..]), ("org", &[2][..]), ("move", &[4, 6][..])] {
+            let marker = format!("\\{tag}");
+            for (at, _) in block.match_indices(&marker) {
+                let following = &block[at + marker.len()..];
+                if following
+                    .chars()
+                    .next()
+                    .is_some_and(|ch| ch.is_ascii_alphabetic())
+                {
+                    continue;
+                }
+                let coordinates = following
+                    .strip_prefix('(')
+                    .and_then(|value| value.split_once(')').map(|(values, _)| values))
+                    .ok_or_else(|| error(format!("Malformed ASS \\{tag} coordinates")))?;
+                let values = coordinates.split(',').collect::<Vec<_>>();
+                if !accepted.contains(&values.len())
+                    || values.iter().any(|value| {
+                        !value
+                            .trim()
+                            .parse::<f64>()
+                            .is_ok_and(|number| number.is_finite())
+                    })
+                {
+                    return Err(error(format!("Malformed ASS \\{tag} coordinates")));
+                }
+            }
+        }
+        rest = &after[end + 1..];
     }
     if is_drawing(text) || split_tags(text).is_err() {
         return Err(error(
@@ -139,7 +176,7 @@ fn event_format(content: &str) -> Result<(usize, Vec<String>)> {
         .ok_or_else(|| error("Destination ASS needs one Events section with a Format line"))
 }
 
-fn defined_styles(content: &str) -> HashSet<String> {
+pub(super) fn defined_styles(content: &str) -> HashSet<String> {
     let mut styles = HashSet::new();
     let mut in_styles = false;
     let mut fields = Vec::new();

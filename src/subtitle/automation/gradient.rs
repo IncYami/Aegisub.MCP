@@ -485,6 +485,22 @@ impl GradientPlan {
         &self.visible_text
     }
 
+    pub(crate) fn same_structure_as(&self, other: &Self) -> bool {
+        self.header == other.header
+            && self.header_keys == other.header_keys
+            && self.stops.keys().eq(other.stops.keys())
+            && self.transforms.len() == other.transforms.len()
+            && self
+                .transforms
+                .iter()
+                .zip(&other.transforms)
+                .all(|(left, right)| {
+                    left.prefix == right.prefix
+                        && left.order == right.order
+                        && left.stops.keys().eq(right.stops.keys())
+                })
+    }
+
     pub(crate) fn rebuild(&self, replacement: &str) -> Option<String> {
         if replacement.contains(['{', '}', '\r', '\n']) {
             return None;

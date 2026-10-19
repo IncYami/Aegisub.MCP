@@ -27,9 +27,13 @@ This project implements a Rust MCP server for reading and editing subtitles dire
 - `src/subtitle/autosave.rs` serializes edits across server processes and keeps the displaced subtitle in a sibling `.autosave` directory whenever an edit succeeds.
 - `src/subtitle/ass_creation.rs` creates empty ASS working files with a configurable base script and Default style.
 - `src/subtitle/event_import.rs` inserts source subtitle events into an ASS working file without changing the source.
+- `src/subtitle/ass_lines.rs` reads ASS Dialogue fields by Format order for audit and structural edits.
+- `src/subtitle/ass_mutation.rs` updates, deletes, moves, and restores ASS event versions under revision checks.
+- `src/subtitle/audit.rs` compares exact ASS revisions and reports policy violations without writing.
 - `src/subtitle/font_collect.rs` tracks font usage in ASS styles and inline tags, inspects installed faces, reports missing glyphs and bold/italic variants, and copies original font files with organized names without overwriting existing files. Do not convert, subset, or split font files in the MCP.
 - `src/mcp.rs` defines the tool interface and adapts its arguments to the ASS core.
 - `docs/subtitle-style-guide.md` is the versioned styling guidance returned by the `get_style_guide` MCP tool. Keep generated ASS events on `Default`; use local override tags for typesetting.
+- `docs/visual-preview-proposal.md` records a future video-frame rendering workflow; visual preview is not implemented.
 
 ## Subtitle integrity
 

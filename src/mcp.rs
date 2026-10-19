@@ -81,6 +81,24 @@ struct ListArgs {
     contexts: Vec<ContextArgs>,
     #[serde(default)]
     proximity_ms: Option<u32>,
+    #[serde(default)]
+    start_ms: Option<u64>,
+    #[serde(default)]
+    end_ms: Option<u64>,
+    #[serde(default)]
+    style: Option<String>,
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    layer: Option<String>,
+    #[serde(default)]
+    include_raw: bool,
+    #[serde(default)]
+    diagnose_context: bool,
+    #[serde(default)]
+    changed_since_path: Option<String>,
+    #[serde(default)]
+    changed_since_revision: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -104,6 +122,8 @@ struct GetArgs {
     contexts: Vec<ContextArgs>,
     #[serde(default)]
     proximity_ms: Option<u32>,
+    #[serde(default)]
+    diagnose_context: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -195,6 +215,97 @@ struct CreateAssEventsArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct AssEventPatchArgs {
+    id: usize,
+    #[serde(default)]
+    start: Option<String>,
+    #[serde(default)]
+    end: Option<String>,
+    #[serde(default)]
+    style: Option<String>,
+    #[serde(default)]
+    layer: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    margin_l: Option<String>,
+    #[serde(default)]
+    margin_r: Option<String>,
+    #[serde(default)]
+    margin_v: Option<String>,
+    #[serde(default)]
+    effect: Option<String>,
+    #[serde(default)]
+    raw_text: Option<String>,
+    #[serde(default)]
+    allow_escape_changes: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct UpdateAssEventsArgs {
+    path: String,
+    expected_revision: String,
+    patches: Vec<AssEventPatchArgs>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct DeleteAssEventsArgs {
+    path: String,
+    expected_revision: String,
+    ids: Vec<usize>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct MoveAssEventArgs {
+    path: String,
+    expected_revision: String,
+    id: usize,
+    #[serde(default)]
+    before_id: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct RestoreAssVersionArgs {
+    path: String,
+    expected_revision: String,
+    version_path: String,
+}
+
+fn default_audit_fields() -> Vec<String> {
+    vec!["Text".to_owned()]
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct AuditPolicyArgs {
+    #[serde(default = "default_audit_fields")]
+    allowed_fields: Vec<String>,
+    #[serde(default)]
+    allowed_event_ids: Vec<usize>,
+    #[serde(default)]
+    allow_non_dialogue_changes: bool,
+    #[serde(default)]
+    allow_event_count_changes: bool,
+    #[serde(default)]
+    allow_reordering: bool,
+    #[serde(default)]
+    allow_gradient_rebuild: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct AuditArgs {
+    baseline_path: String,
+    edited_path: String,
+    expected_baseline_revision: String,
+    expected_edited_revision: String,
+    #[serde(default)]
+    policy: Option<AuditPolicyArgs>,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct CollectFontsArgs {
     ass_path: String,
     #[serde(default)]
@@ -240,7 +351,7 @@ struct BatchArgs {
 #[tool_router]
 impl SubtitleServer {
     #[tool(
-        description = "Read the project's ASS subtitle style guide. Use it before choosing fonts or typesetting tags. It explains the Lato Default dialogue style, Google Fonts suggestions by visual use and script coverage, and the convention of keeping events on Default while applying local override tags. Read-only; no subtitle file is changed."
+        description = "Read the project's ASS subtitle style guide. Use it before choosing fonts or typesetting tags. It explains the Lato Default style for new scripts, preservation of existing master styles, Google Fonts suggestions, and local override tags. Read-only; no subtitle file is changed."
     )]
     fn get_style_guide(&self) -> CallToolResult {
         CallToolResult::structured(serde_json::json!({
@@ -358,17 +469,142 @@ impl SubtitleServer {
     }
 
     #[tool(
-        description = "List ASS Dialogue events or plain SRT/WebVTT cues. Use offset and limit for pagination; optionally filter visible text with query. Optional context tracks in ASS, SRT or WebVTT align by time. Each result includes the current file revision."
+        description = "Update fields or raw ASS Text in existing Dialogue events. Only registered .ass files are editable. Pass patches with IDs and selected fields; raw_text replaces the complete Text field, including override tags. ASS escape counts are preserved unless allow_escape_changes is explicitly true. Validates timing, style, fields, override-block structure, and supported positional tags before one atomic write. Requires expected_revision and returns field diffs, new revision, and autosave_path."
+    )]
+    fn update_ass_events(
+        &self,
+        Parameters(args): Parameters<UpdateAssEventsArgs>,
+    ) -> CallToolResult {
+        if let Err(message) = self.require_editable_file(&args.path) {
+            return tool_error(message);
+        }
+        let patches = args
+            .patches
+            .into_iter()
+            .map(|patch| subtitle::AssEventPatch {
+                id: patch.id,
+                start: patch.start,
+                end: patch.end,
+                style: patch.style,
+                layer: patch.layer,
+                name: patch.name,
+                margin_l: patch.margin_l,
+                margin_r: patch.margin_r,
+                margin_v: patch.margin_v,
+                effect: patch.effect,
+                raw_text: patch.raw_text,
+                allow_escape_changes: patch.allow_escape_changes,
+            })
+            .collect::<Vec<_>>();
+        tool_result(subtitle::update_ass_events(
+            &args.path,
+            &args.expected_revision,
+            &patches,
+        ))
+    }
+
+    #[tool(
+        description = "Delete selected Dialogue events from a registered .ass file in one atomic write. Requires current expected_revision and one or more unique IDs. Preserves all remaining bytes, creates an autosave, and returns removed IDs. Event IDs after a deletion are reassigned by file order; fetch a new revision and IDs before further edits."
+    )]
+    fn delete_ass_events(
+        &self,
+        Parameters(args): Parameters<DeleteAssEventsArgs>,
+    ) -> CallToolResult {
+        if let Err(message) = self.require_editable_file(&args.path) {
+            return tool_error(message);
+        }
+        tool_result(subtitle::delete_ass_events(
+            &args.path,
+            &args.expected_revision,
+            &args.ids,
+        ))
+    }
+
+    #[tool(
+        description = "Move one Dialogue event before another Dialogue ID in a registered .ass file; omit before_id to move to the end. Preserves non-Dialogue lines in place and rejects moves across differing Events Format definitions. Requires current expected_revision, creates an autosave, and returns the moved event's new position. IDs change with order; fetch them again afterward."
+    )]
+    fn move_ass_event(&self, Parameters(args): Parameters<MoveAssEventArgs>) -> CallToolResult {
+        if let Err(message) = self.require_editable_file(&args.path) {
+            return tool_error(message);
+        }
+        tool_result(subtitle::move_ass_event(
+            &args.path,
+            &args.expected_revision,
+            args.id,
+            args.before_id,
+        ))
+    }
+
+    #[tool(
+        description = "Restore a registered .ass subtitle from its own sibling .backup or .autosave version. Requires current expected_revision and version_path. The currently active file is preserved as a new autosave before restoring the selected version. This restores the entire file; use update_ass_events to undo only selected event fields."
+    )]
+    fn restore_ass_version(
+        &self,
+        Parameters(args): Parameters<RestoreAssVersionArgs>,
+    ) -> CallToolResult {
+        if let Err(message) = self.require_editable_file(&args.path) {
+            return tool_error(message);
+        }
+        tool_result(subtitle::restore_ass_version(
+            &args.path,
+            &args.expected_revision,
+            &args.version_path,
+        ))
+    }
+
+    #[tool(
+        description = "Compare two exact ASS revisions without editing either file. Supply baseline_path and edited_path with both expected revision hashes. Reports changed event fields and tags, unchanged Text IDs, additions/removals, order and other-section changes, plus violations of an optional policy. Default policy allows Text edits only. Results are paginated; a report applies only to its returned revisions."
+    )]
+    fn audit_subtitle(&self, Parameters(args): Parameters<AuditArgs>) -> CallToolResult {
+        let policy = args.policy.unwrap_or(AuditPolicyArgs {
+            allowed_fields: default_audit_fields(),
+            allowed_event_ids: Vec::new(),
+            allow_non_dialogue_changes: false,
+            allow_event_count_changes: false,
+            allow_reordering: false,
+            allow_gradient_rebuild: false,
+        });
+        tool_result(subtitle::audit_subtitle(
+            &args.baseline_path,
+            &args.edited_path,
+            &args.expected_baseline_revision,
+            &args.expected_edited_revision,
+            &subtitle::AuditPolicy {
+                allowed_fields: policy.allowed_fields,
+                allowed_event_ids: policy.allowed_event_ids,
+                allow_non_dialogue_changes: policy.allow_non_dialogue_changes,
+                allow_event_count_changes: policy.allow_event_count_changes,
+                allow_reordering: policy.allow_reordering,
+                allow_gradient_rebuild: policy.allow_gradient_rebuild,
+            },
+            args.offset,
+            args.limit.unwrap_or(50).min(200),
+        ))
+    }
+
+    #[tool(
+        description = "List ASS Dialogue events or SRT/WebVTT cues. Paginate with offset and limit (max 200); filter by visible-text query, overlapping [start_ms,end_ms), style, ASS layer, or kind=text|drawing. include_raw returns ASS Text fields in a window. changed_since_path and changed_since_revision compare event positions when counts are unchanged; exact reorders are rejected. Use audit_subtitle for structural changes. Optional context tracks align by time; diagnose_context adds candidates withheld by ambiguous or insufficient matching. Returns current revision."
     )]
     fn list_events(&self, Parameters(args): Parameters<ListArgs>) -> CallToolResult {
         let contexts = context_tracks(args.contexts);
-        tool_result(subtitle::list_events_with_context(
+        tool_result(subtitle::list_events_filtered(
             &args.path,
             args.offset,
             args.limit.unwrap_or(50).min(200),
             args.query.as_deref(),
             &contexts,
             args.proximity_ms.unwrap_or(500),
+            &subtitle::EventFilters {
+                start_ms: args.start_ms,
+                end_ms: args.end_ms,
+                style: args.style,
+                kind: args.kind,
+                layer: args.layer,
+                include_raw: args.include_raw,
+                diagnose_context: args.diagnose_context,
+                changed_since_path: args.changed_since_path,
+                changed_since_revision: args.changed_since_revision,
+            },
         ))
     }
 
@@ -385,16 +621,17 @@ impl SubtitleServer {
     }
 
     #[tool(
-        description = "Get one ASS Dialogue event or SRT/WebVTT cue by its one-based ID. ASS tags are hidden by default; set include_raw to inspect source text. Optional ASS, SRT or WebVTT context tracks align by time. Returns the file revision required for editing."
+        description = "Get one ASS Dialogue event or SRT/WebVTT cue by its one-based ID. ASS tags are hidden by default; set include_raw to inspect source text. Optional context tracks align by time; diagnose_context also reports rejected or ambiguous candidates. Returns the file revision required for editing."
     )]
     fn get_event(&self, Parameters(args): Parameters<GetArgs>) -> CallToolResult {
         let contexts = context_tracks(args.contexts);
-        tool_result(subtitle::get_event_with_context(
+        tool_result(subtitle::get_event_with_diagnostics(
             &args.path,
             args.id,
             args.include_raw,
             &contexts,
             args.proximity_ms.unwrap_or(500),
+            args.diagnose_context,
         ))
     }
 
@@ -476,7 +713,7 @@ impl ServerHandler for SubtitleServer {
                 env!("CARGO_PKG_NAME"),
                 env!("CARGO_PKG_VERSION"),
             ))
-            .with_instructions("Read ASS, SRT or WebVTT subtitles and align optional context tracks. ASS is the primary format. Call get_style_guide before choosing a font or planning typesetting. Keep Dialogue events on the Default style and use local override tags for typesetting. To start an empty ASS script, call create_ass, then create_ass_events to write Dialogue events directly or insert_events_from_source to copy cues from another subtitle. Before editing an existing subtitle, call prepare_subtitle to save a timestamped backup in .backup. Use the returned editable_path for edits to the original file. Each successful edit preserves the displaced subtitle in .autosave and returns autosave_path. Fetch a current revision before every edit. For translation, list_text_groups can present identical visible text once across dialogue and signs; use replace_text_group to apply one translation to all safe occurrences. Once font choices are final, collect installed font files with collect_fonts.")
+            .with_instructions("Before editing an existing ASS, SRT, or WebVTT subtitle, call prepare_subtitle; it backs up and registers the original. Fetch the current revision before every edit. New ASS files start with create_ass, then create_ass_events or insert_events_from_source. Preserve existing master styles, layers, timing, and tags unless an edit explicitly requests changes. New scripts use Default with local override tags. Each edit saves an autosave. Use audit_subtitle against a known baseline before delivery. Read get_style_guide for font and typesetting guidance. Context matches are timing candidates; diagnose_context exposes ambiguity. collect_fonts reports installed font coverage.")
     }
 }
 
@@ -501,10 +738,11 @@ mod tests {
             .as_str()
             .unwrap()
             .to_owned();
-        assert!(guide.contains("Keep the entire subtitle on the `Default` ASS style"));
+        assert!(guide.contains("For a new script created with `create_ass`"));
+        assert!(guide.contains("When editing an existing master"));
         assert!(guide.contains("Permanent Marker"));
         assert!(guide.contains("Tinos"));
-        assert!(guide.contains("do not currently add new override blocks"));
+        assert!(guide.contains("Use `update_ass_events`"));
     }
 
     #[test]
@@ -793,5 +1031,31 @@ mod tests {
                 .unwrap()
                 .contains("Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,Hello")
         );
+    }
+
+    #[test]
+    fn mcp_ass_event_updates_require_preparation() {
+        use sha2::Digest;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("existing.ass");
+        let original = "[V4+ Styles]\nFormat: Name, Fontname\nStyle: Default,Lato\n[Events]\nFormat: Start, End, Style, Text\nDialogue: 0:00:01.00,0:00:02.00,Default,Hello\n";
+        fs::write(&path, original).unwrap();
+        let server = SubtitleServer::default();
+        let args = serde_json::json!({
+            "path": path.display().to_string(),
+            "expected_revision": format!("{:x}", sha2::Sha256::digest(original.as_bytes())),
+            "patches": [{"id": 1, "start": "0:00:01.20"}]
+        });
+        let denied =
+            server.update_ass_events(Parameters(serde_json::from_value(args.clone()).unwrap()));
+        assert_eq!(denied.is_error, Some(true));
+        assert_eq!(fs::read_to_string(&path).unwrap(), original);
+        let prepared = server.prepare_subtitle(Parameters(PrepareSubtitleArgs {
+            source_path: path.display().to_string(),
+        }));
+        assert_ne!(prepared.is_error, Some(true));
+        let allowed = server.update_ass_events(Parameters(serde_json::from_value(args).unwrap()));
+        assert_ne!(allowed.is_error, Some(true));
+        assert!(fs::read_to_string(path).unwrap().contains("0:00:01.20"));
     }
 }

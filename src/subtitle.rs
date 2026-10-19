@@ -3,6 +3,9 @@ use std::{collections::BTreeMap, fmt, ops::Range, sync::Arc};
 
 mod ass;
 mod ass_creation;
+mod ass_lines;
+mod ass_mutation;
+mod audit;
 mod automation;
 mod autosave;
 mod backup;
@@ -16,12 +19,18 @@ mod query;
 mod timed_text;
 
 pub use ass_creation::create_ass;
+pub use ass_mutation::{
+    AssEventPatch, delete_ass_events, move_ass_event, restore_ass_version, update_ass_events,
+};
+pub use audit::{AuditPolicy, audit_subtitle};
 pub use backup::prepare_subtitle;
 pub use direct_events::{NewAssEvent, create_ass_events};
 pub use edit::{replace_segment, replace_text, replace_text_batch};
 pub use event_import::insert_events_from_source;
 pub use font_collect::collect_fonts;
 pub use group::{list_text_groups, replace_text_group};
+pub use query::{EventFilters, get_event_with_diagnostics, list_events_filtered};
+#[cfg(test)]
 pub use query::{get_event_with_context, list_events_with_context};
 
 #[derive(Debug)]
@@ -75,6 +84,8 @@ pub struct EventView {
     read_only_reason: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     contexts: Option<BTreeMap<String, Vec<ContextMatch>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context_diagnostics: Option<BTreeMap<String, ContextDiagnostic>>,
 }
 
 pub struct ContextTrack {
@@ -93,6 +104,13 @@ pub struct ContextMatch {
     overlap_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     distance_ms: Option<u64>,
+}
+
+#[derive(Serialize)]
+pub struct ContextDiagnostic {
+    status: &'static str,
+    candidate_ids: Vec<usize>,
+    withheld_ids: Vec<usize>,
 }
 
 #[derive(Serialize)]
