@@ -64,6 +64,7 @@ pub fn list_text_groups(
     offset: usize,
     limit: usize,
     query: Option<&str>,
+    query_regex: bool,
 ) -> Result<TextGroupsResult> {
     let doc = Document::open(Path::new(path))?;
     let mut index = BTreeMap::<String, usize>::new();
@@ -90,13 +91,15 @@ pub fn list_text_groups(
         }
     }
     let total_groups = groups.len();
-    let query = query.map(str::to_lowercase);
+    let query = query
+        .map(|query| super::query::TextQuery::new(query, query_regex))
+        .transpose()?;
     let matching = groups
         .into_iter()
         .filter(|group| {
             query
                 .as_ref()
-                .is_none_or(|query| group.source_text.to_lowercase().contains(query))
+                .is_none_or(|query| query.matches(&group.source_text))
         })
         .collect::<Vec<_>>();
     let matched_groups = matching.len();

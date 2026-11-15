@@ -6,8 +6,36 @@ use super::{
 };
 use std::path::Path;
 
+pub(super) enum TextQuery {
+    Substring(String),
+    Pattern(regex::Regex),
+}
+
+impl TextQuery {
+    pub(super) fn new(query: &str, as_regex: bool) -> Result<Self> {
+        if as_regex {
+            return Ok(TextQuery::Pattern(
+                regex::RegexBuilder::new(query)
+                    .case_insensitive(true)
+                    .build()
+                    .map_err(|e| error(format!("Invalid query regex: {e}")))?,
+            ));
+        }
+        Ok(TextQuery::Substring(query.to_lowercase()))
+    }
+
+    pub(super) fn matches(&self, text: &str) -> bool {
+        match self {
+            TextQuery::Substring(needle) => text.to_lowercase().contains(needle),
+            TextQuery::Pattern(pattern) => pattern.is_match(text),
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct EventFilters {
+    pub query: Option<String>,
+    pub query_regex: bool,
     pub start_ms: Option<u64>,
     pub end_ms: Option<u64>,
     pub style: Option<String>,
@@ -93,10 +121,12 @@ pub fn list_events_with_context(
         path,
         offset,
         limit,
-        query,
         contexts,
         proximity_ms,
-        &EventFilters::default(),
+        &EventFilters {
+            query: query.map(str::to_owned),
+            ..EventFilters::default()
+        },
     )
 }
 
@@ -104,7 +134,6 @@ pub fn list_events_filtered(
     path: &str,
     offset: usize,
     limit: usize,
-    query: Option<&str>,
     contexts: &[super::ContextTrack],
     proximity_ms: u32,
     filters: &EventFilters,
@@ -125,7 +154,11 @@ pub fn list_events_filtered(
     }
     let doc = Document::open(Path::new(path))?;
     let total_events = doc.events.len();
-    let query = query.map(str::to_lowercase);
+    let query = filters
+        .query
+        .as_deref()
+        .map(|query| TextQuery::new(query, filters.query_regex))
+        .transpose()?;
     let changed = match (&filters.changed_since_path, &filters.changed_since_revision) {
         (None, None) => None,
         (Some(source), Some(revision)) => {
@@ -218,7 +251,7 @@ pub fn list_events_filtered(
         .filter(|event| {
             query
                 .as_ref()
-                .is_none_or(|q| event.visible_text.to_lowercase().contains(q))
+                .is_none_or(|query| query.matches(&event.visible_text))
         })
         .collect();
     let matched_events = matching.len();

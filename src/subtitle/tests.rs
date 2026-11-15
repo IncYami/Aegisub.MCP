@@ -89,6 +89,7 @@ fn ass_field_and_tag_updates_are_atomic_and_auditable() {
         &revision,
         value["revision"].as_str().unwrap(),
         &policy,
+        false,
         0,
         50,
     )
@@ -106,6 +107,7 @@ fn ass_field_and_tag_updates_are_atomic_and_auditable() {
             &revision,
             "stale",
             &policy,
+            false,
             0,
             50
         )
@@ -142,6 +144,7 @@ fn ass_move_delete_and_restore_preserve_other_lines() {
             &revision,
             moved_revision,
             &policy,
+            true,
             0,
             50,
         )
@@ -162,16 +165,7 @@ fn ass_move_delete_and_restore_preserve_other_lines() {
         ..EventFilters::default()
     };
     assert!(
-        list_events_filtered(
-            active.to_str().unwrap(),
-            0,
-            20,
-            None,
-            &[],
-            500,
-            &reordered_filter
-        )
-        .is_err()
+        list_events_filtered(active.to_str().unwrap(), 0, 20, &[], 500, &reordered_filter).is_err()
     );
     let deleted = delete_ass_events(active.to_str().unwrap(), moved_revision, &[2]).unwrap();
     let deleted_value = serde_json::to_value(&deleted).unwrap();
@@ -190,6 +184,7 @@ fn ass_move_delete_and_restore_preserve_other_lines() {
             moved_revision,
             deleted_value["revision"].as_str().unwrap(),
             &policy,
+            false,
             0,
             50,
         )
@@ -234,16 +229,8 @@ fn filtered_windows_and_context_diagnostics_report_candidates() {
         name: "reference".into(),
         path: context.display().to_string(),
     };
-    let result = list_events_filtered(
-        active.to_str().unwrap(),
-        0,
-        20,
-        None,
-        &[track],
-        500,
-        &filters,
-    )
-    .unwrap();
+    let result =
+        list_events_filtered(active.to_str().unwrap(), 0, 20, &[track], 500, &filters).unwrap();
     let value = serde_json::to_value(result).unwrap();
     assert_eq!(value["matched_events"], 1);
     assert_eq!(value["events"][0]["id"], 2);
@@ -258,7 +245,7 @@ fn filtered_windows_and_context_diagnostics_report_candidates() {
         ..EventFilters::default()
     };
     assert_eq!(
-        list_events_filtered(active.to_str().unwrap(), 0, 20, None, &[], 500, &changed)
+        list_events_filtered(active.to_str().unwrap(), 0, 20, &[], 500, &changed)
             .unwrap()
             .matched_events,
         0
@@ -288,6 +275,7 @@ fn audit_reports_other_sections_and_rejects_stale_revisions() {
             &super::ass::hash(small_ass().as_bytes()),
             &super::ass::hash(changed.as_bytes()),
             &policy,
+            false,
             0,
             20,
         )
@@ -308,6 +296,7 @@ fn audit_reports_other_sections_and_rejects_stale_revisions() {
             "stale",
             &super::ass::hash(changed.as_bytes()),
             &policy,
+            false,
             0,
             20
         )
@@ -1240,6 +1229,7 @@ fn edit_supported_gradient_in_copy_of_real_fixture() {
             &source_doc.revision,
             &hash(edited.as_bytes()),
             &policy,
+            false,
             0,
             20,
         )
@@ -1286,6 +1276,7 @@ fn edit_copy_of_real_fixture() {
             &source_doc.revision,
             &hash(&edited),
             &policy,
+            false,
             0,
             20,
         )
@@ -1305,7 +1296,7 @@ fn groups_identical_text_across_styles_and_applies_once() {
     let original = "[Events]\nFormat: Start, End, Style, Text\nDialogue: 0:00:01.00,0:00:02.00,Default,Hello\nDialogue: 0:00:02.00,0:00:03.00,Default,Other\nDialogue: 0:00:03.00,0:00:04.00,Sign,{\\fnMarker}Hello\nDialogue: 0:00:04.00,0:00:05.00,Sign,{\\i1}Hello{\\i0}\n";
     fs::write(&path, original).unwrap();
     let name = path.to_str().unwrap();
-    let groups = list_text_groups(name, 0, 50, None).unwrap();
+    let groups = list_text_groups(name, 0, 50, None, false).unwrap();
     assert_eq!(groups.total_events, 4);
     assert_eq!(groups.total_groups, 2);
     assert_eq!(groups.groups[0].source_text, "Hello");
@@ -1337,7 +1328,7 @@ fn group_edit_rejects_ambiguous_internal_tags_without_writing() {
     let original = "[Events]\nFormat: Start, End, Style, Text\nDialogue: 0:00:01.00,0:00:02.00,Default,Hello\nDialogue: 0:00:03.00,0:00:04.00,Sign,Hel{\\c&HFFFFFF&}lo\n";
     fs::write(&path, original).unwrap();
     let name = path.to_str().unwrap();
-    let groups = list_text_groups(name, 0, 50, None).unwrap();
+    let groups = list_text_groups(name, 0, 50, None, false).unwrap();
     assert_eq!(groups.groups.len(), 1);
     assert!(!groups.groups[0].automatic_apply);
     assert_eq!(
@@ -1346,4 +1337,112 @@ fn group_edit_rejects_ambiguous_internal_tags_without_writing() {
     );
     assert!(replace_text_group(name, 1, &groups.revision, "Hello", "Olá").is_err());
     assert_eq!(fs::read_to_string(path).unwrap(), original);
+}
+
+#[test]
+fn regex_query_filters_visible_text_and_groups() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("clitics.ass");
+    let original = "[Events]\nFormat: Start, End, Style, Text\nDialogue: 0:00:01.00,0:00:02.00,Default,Vou-me embora\nDialogue: 0:00:02.00,0:00:03.00,Default,Guarda-chuva novo\nDialogue: 0:00:03.00,0:00:04.00,Default,Disse-lhe a verdade\n";
+    fs::write(&path, original).unwrap();
+    let name = path.to_str().unwrap();
+    let substring = list_events_filtered(
+        name,
+        0,
+        50,
+        &[],
+        500,
+        &EventFilters {
+            query: Some("-".into()),
+            ..EventFilters::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(substring.matched_events, 3);
+    let clitics = list_events_filtered(
+        name,
+        0,
+        50,
+        &[],
+        500,
+        &EventFilters {
+            query: Some("-(me|lhe)\\b".into()),
+            query_regex: true,
+            ..EventFilters::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(clitics.matched_events, 2);
+    assert_eq!(clitics.events[0].visible_text, "Vou-me embora");
+    assert_eq!(clitics.events[1].visible_text, "Disse-lhe a verdade");
+    assert!(
+        list_events_filtered(
+            name,
+            0,
+            50,
+            &[],
+            500,
+            &EventFilters {
+                query: Some("([".into()),
+                query_regex: true,
+                ..EventFilters::default()
+            }
+        )
+        .is_err()
+    );
+    let groups_substring = list_text_groups(name, 0, 50, Some("-"), false).unwrap();
+    assert_eq!(groups_substring.matched_groups, 3);
+    let groups_regex = list_text_groups(name, 0, 50, Some("-(me|lhe)\\b"), true).unwrap();
+    assert_eq!(groups_regex.matched_groups, 2);
+    assert!(list_text_groups(name, 0, 50, Some("(["), true).is_err());
+}
+
+#[test]
+fn audit_summarizes_unchanged_text_ids_by_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let baseline = dir.path().join("baseline.ass");
+    let edited = dir.path().join("edited.ass");
+    fs::write(&baseline, small_ass()).unwrap();
+    fs::write(&edited, small_ass().replace("Third", "Changed")).unwrap();
+    let policy = AuditPolicy {
+        allowed_fields: vec!["Text".into()],
+        allowed_event_ids: vec![],
+        allow_non_dialogue_changes: false,
+        allow_event_count_changes: false,
+        allow_reordering: false,
+        allow_gradient_rebuild: false,
+    };
+    let edited_revision = hash(small_ass().replace("Third", "Changed").as_bytes());
+    let summary = serde_json::to_value(
+        audit_subtitle(
+            baseline.to_str().unwrap(),
+            edited.to_str().unwrap(),
+            &hash(small_ass().as_bytes()),
+            &edited_revision,
+            &policy,
+            false,
+            0,
+            20,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(summary["total_changed_events"], 1);
+    assert_eq!(summary["unchanged_text_count"], 2);
+    assert!(summary.get("unchanged_text_ids").is_none());
+    let full = serde_json::to_value(
+        audit_subtitle(
+            baseline.to_str().unwrap(),
+            edited.to_str().unwrap(),
+            &hash(small_ass().as_bytes()),
+            &edited_revision,
+            &policy,
+            true,
+            0,
+            20,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(full["unchanged_text_ids"], serde_json::json!([1, 2]));
 }

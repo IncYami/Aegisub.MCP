@@ -80,6 +80,8 @@ struct ListArgs {
     #[serde(default)]
     query: Option<String>,
     #[serde(default)]
+    query_regex: bool,
+    #[serde(default)]
     contexts: Vec<ContextArgs>,
     #[serde(default)]
     proximity_ms: Option<u32>,
@@ -112,6 +114,8 @@ struct ListGroupsArgs {
     limit: Option<usize>,
     #[serde(default)]
     query: Option<String>,
+    #[serde(default)]
+    query_regex: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -301,6 +305,8 @@ struct AuditArgs {
     expected_edited_revision: String,
     #[serde(default)]
     policy: Option<AuditPolicyArgs>,
+    #[serde(default)]
+    include_unchanged_ids: bool,
     #[serde(default)]
     offset: usize,
     #[serde(default)]
@@ -553,7 +559,7 @@ impl SubtitleServer {
     }
 
     #[tool(
-        description = "Compare two exact ASS revisions without editing either file. Supply baseline_path and edited_path with both expected revision hashes. Reports changed event fields and tags, unchanged Text IDs, additions/removals, order and other-section changes, plus violations of an optional policy. Default policy allows Text edits only. Results are paginated; a report applies only to its returned revisions."
+        description = "Compare two exact ASS revisions without editing either file. Supply baseline_path and edited_path with both expected revision hashes. Reports changed event fields and tags, additions/removals, order and other-section changes, plus violations of an optional policy. Unchanged Text IDs are summarized as unchanged_text_count; pass include_unchanged_ids to also list them. Default policy allows Text edits only. Results are paginated; a report applies only to its returned revisions."
     )]
     fn audit_subtitle(&self, Parameters(args): Parameters<AuditArgs>) -> CallToolResult {
         let policy = args.policy.unwrap_or(AuditPolicyArgs {
@@ -577,13 +583,14 @@ impl SubtitleServer {
                 allow_reordering: policy.allow_reordering,
                 allow_gradient_rebuild: policy.allow_gradient_rebuild,
             },
+            args.include_unchanged_ids,
             args.offset,
             args.limit.unwrap_or(50).min(200),
         ))
     }
 
     #[tool(
-        description = "List ASS Dialogue events or SRT/WebVTT cues. Paginate with offset and limit (max 200); filter by visible-text query, overlapping [start_ms,end_ms), style, ASS layer, or kind=text|drawing. include_raw returns ASS Text fields in a window. changed_since_path and changed_since_revision compare event positions when counts are unchanged; exact reorders are rejected. Use audit_subtitle for structural changes. Optional context tracks align by time; diagnose_context adds candidates withheld by ambiguous or insufficient matching. Returns current revision."
+        description = "List ASS Dialogue events or SRT/WebVTT cues. Paginate with offset and limit (max 200); filter by visible-text query, overlapping [start_ms,end_ms), style, ASS layer, or kind=text|drawing. The query is a case-insensitive substring; set query_regex to treat it as a case-insensitive regular expression instead. include_raw returns ASS Text fields in a window. changed_since_path and changed_since_revision compare event positions when counts are unchanged; exact reorders are rejected. Use audit_subtitle for structural changes. Optional context tracks align by time; diagnose_context adds candidates withheld by ambiguous or insufficient matching. Returns current revision."
     )]
     fn list_events(&self, Parameters(args): Parameters<ListArgs>) -> CallToolResult {
         let contexts = context_tracks(args.contexts);
@@ -591,10 +598,11 @@ impl SubtitleServer {
             &args.path,
             args.offset,
             args.limit.unwrap_or(50).min(200),
-            args.query.as_deref(),
             &contexts,
             args.proximity_ms.unwrap_or(500),
             &subtitle::EventFilters {
+                query: args.query,
+                query_regex: args.query_regex,
                 start_ms: args.start_ms,
                 end_ms: args.end_ms,
                 style: args.style,
@@ -609,7 +617,7 @@ impl SubtitleServer {
     }
 
     #[tool(
-        description = "List subtitle text grouped by exact visible text across the entire ASS, SRT, or WebVTT file. Grouping ignores ASS override tags and does not depend on style, timing, or adjacency. Returns one group per distinct text, including single occurrences, with member IDs, timing, styles, revision, and whether one translation can be applied automatically to every occurrence. Internal ASS tags that need event-specific placement are flagged. Read-only."
+        description = "List subtitle text grouped by exact visible text across the entire ASS, SRT, or WebVTT file. Grouping ignores ASS override tags and does not depend on style, timing, or adjacency. Returns one group per distinct text, including single occurrences, with member IDs, timing, styles, revision, and whether one translation can be applied automatically to every occurrence. The query is a case-insensitive substring; set query_regex to treat it as a case-insensitive regular expression instead. Internal ASS tags that need event-specific placement are flagged. Read-only."
     )]
     fn list_text_groups(&self, Parameters(args): Parameters<ListGroupsArgs>) -> CallToolResult {
         tool_result(subtitle::list_text_groups(
@@ -617,6 +625,7 @@ impl SubtitleServer {
             args.offset,
             args.limit.unwrap_or(50).min(200),
             args.query.as_deref(),
+            args.query_regex,
         ))
     }
 
@@ -838,6 +847,7 @@ mod tests {
             offset: 0,
             limit: None,
             query: None,
+            query_regex: false,
         }));
         assert_ne!(listed.is_error, Some(true));
         let listing = listed.structured_content.unwrap();

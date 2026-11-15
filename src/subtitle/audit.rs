@@ -62,7 +62,9 @@ pub struct AuditResult {
     alignment: &'static str,
     added_ids: Vec<usize>,
     removed_ids: Vec<usize>,
-    unchanged_text_ids: Vec<usize>,
+    unchanged_text_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    unchanged_text_ids: Option<Vec<usize>>,
     total_changed_events: usize,
     policy_violations: Vec<String>,
     offset: usize,
@@ -320,12 +322,16 @@ fn compare_event(
     }
 }
 
+// The audit accepts every comparison input explicitly so the MCP layer maps
+// one tool argument per parameter without intermediate state.
+#[allow(clippy::too_many_arguments)]
 pub fn audit_subtitle(
     baseline_path: &str,
     edited_path: &str,
     expected_baseline_revision: &str,
     expected_edited_revision: &str,
     policy: &AuditPolicy,
+    include_unchanged_ids: bool,
     offset: usize,
     limit: usize,
 ) -> Result<AuditResult> {
@@ -462,6 +468,8 @@ pub fn audit_subtitle(
         return Err(error("An audited subtitle changed during comparison"));
     }
     let total_changed_events = differences.len();
+    let unchanged_text_count = unchanged_text_ids.len();
+    let unchanged_text_ids = include_unchanged_ids.then_some(unchanged_text_ids);
     Ok(AuditResult {
         baseline_revision: baseline.revision,
         edited_revision: edited.revision,
@@ -474,6 +482,7 @@ pub fn audit_subtitle(
         alignment,
         added_ids,
         removed_ids,
+        unchanged_text_count,
         unchanged_text_ids,
         total_changed_events,
         policy_violations,
