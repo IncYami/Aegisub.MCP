@@ -399,7 +399,7 @@ fn edit_preserves_unrelated_bytes_and_tags() {
 }
 
 #[test]
-fn preparation_preserves_timestamped_backups_and_edits_original() {
+fn preparation_preserves_timestamped_originals_and_edits_subtitle() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source.ass");
     let original = "\u{feff}[Events]\r\nFormat: Start, End, Style, Text\r\nDialogue: 0:00:01.00,0:00:02.00,Default,Original\r\n";
@@ -407,17 +407,20 @@ fn preparation_preserves_timestamped_backups_and_edits_original() {
     let prepared = prepare_subtitle(source.to_str().unwrap()).unwrap();
     assert_eq!(prepared.editable_path, source.to_str().unwrap());
     assert_eq!(prepared.total_events, 1);
-    let backup = std::path::Path::new(&prepared.backup_path);
-    assert_eq!(backup.parent().unwrap(), dir.path().join(".backup"));
-    let name = backup.file_name().unwrap().to_str().unwrap();
+    let original_copy = std::path::Path::new(&prepared.backup_path);
+    assert_eq!(
+        original_copy.parent().unwrap(),
+        dir.path().join(".autosave")
+    );
+    let name = original_copy.file_name().unwrap().to_str().unwrap();
     assert!(name.starts_with("source.20"));
-    assert!(name.ends_with("Z.BACKUP.ass"));
-    assert_eq!(fs::read_to_string(backup).unwrap(), original);
-    assert!(prepare_subtitle(backup.to_str().unwrap()).is_err());
+    assert!(name.ends_with("Z.ORIGINAL.ass"));
+    assert_eq!(fs::read_to_string(original_copy).unwrap(), original);
+    assert!(prepare_subtitle(original_copy.to_str().unwrap()).is_err());
     let changed =
         replace_text(&prepared.editable_path, 1, &prepared.revision, "Translated").unwrap();
     assert!(fs::read_to_string(&source).unwrap().contains("Translated"));
-    assert_eq!(fs::read_to_string(backup).unwrap(), original);
+    assert_eq!(fs::read_to_string(original_copy).unwrap(), original);
     let autosave = std::path::Path::new(&changed.autosave_path);
     assert_eq!(autosave.parent().unwrap(), dir.path().join(".autosave"));
     assert!(
@@ -437,6 +440,25 @@ fn preparation_preserves_timestamped_backups_and_edits_original() {
             .unwrap()
             .contains("Translated")
     );
+}
+
+#[test]
+fn restore_from_the_original_copy_brings_back_the_first_revision() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("episode.ass");
+    let original = "[Events]\nFormat: Start, End, Style, Text\nDialogue: 0:00:01.00,0:00:02.00,Default,Original\n";
+    fs::write(&source, original).unwrap();
+    let prepared = prepare_subtitle(source.to_str().unwrap()).unwrap();
+    let changed = replace_text(&prepared.editable_path, 1, &prepared.revision, "Changed").unwrap();
+    let restored = restore_ass_version(
+        &prepared.editable_path,
+        &changed.revision,
+        &prepared.backup_path,
+    )
+    .unwrap();
+    let restored_value = serde_json::to_value(restored).unwrap();
+    assert_eq!(restored_value["revision"], prepared.revision);
+    assert_eq!(fs::read_to_string(&source).unwrap(), original);
 }
 
 #[test]

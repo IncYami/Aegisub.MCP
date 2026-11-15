@@ -24,10 +24,11 @@ impl SubtitleServer {
     fn register_editable_file(&self, path: &str) -> Result<(), String> {
         let path =
             fs::canonicalize(path).map_err(|e| format!("Cannot resolve editable subtitle: {e}"))?;
-        if path.components().any(|component| {
-            component.as_os_str() == ".backup" || component.as_os_str() == ".autosave"
-        }) {
-            return Err("Files inside .backup or .autosave cannot be edited".to_owned());
+        if path
+            .components()
+            .any(|component| component.as_os_str() == ".autosave")
+        {
+            return Err("Files inside .autosave cannot be edited".to_owned());
         }
         self.editable_files
             .lock()
@@ -39,10 +40,11 @@ impl SubtitleServer {
     fn require_editable_file(&self, path: &str) -> Result<(), String> {
         let canonical =
             fs::canonicalize(path).map_err(|e| format!("Cannot resolve editable file: {e}"))?;
-        if canonical.components().any(|component| {
-            component.as_os_str() == ".backup" || component.as_os_str() == ".autosave"
-        }) {
-            return Err("Files inside .backup or .autosave cannot be edited".to_owned());
+        if canonical
+            .components()
+            .any(|component| component.as_os_str() == ".autosave")
+        {
+            return Err("Files inside .autosave cannot be edited".to_owned());
         }
         let registered = self
             .editable_files
@@ -370,7 +372,7 @@ impl SubtitleServer {
     }
 
     #[tool(
-        description = "Back up an existing ASS, SSA, SRT or WebVTT subtitle to a timestamped .BACKUP file in a sibling .backup directory, then authorize edits to the original file in this server session. Edits save the displaced version in .autosave with an .AUTOSAVE suffix. The backup preserves the original bytes and is never edited by MCP tools. Returns editable_path, backup_path and the current revision."
+        description = "Save a timestamped .ORIGINAL copy of an existing ASS, SSA, SRT or WebVTT subtitle in a sibling .autosave directory, then authorize edits to the original file in this server session. Edits save the displaced version in .autosave with an .AUTOSAVE suffix. Original copies and displaced versions are never edited by MCP tools. Returns editable_path, backup_path and the current revision."
     )]
     fn prepare_subtitle(
         &self,
@@ -393,11 +395,9 @@ impl SubtitleServer {
     fn create_ass(&self, Parameters(args): Parameters<CreateAssArgs>) -> CallToolResult {
         if std::path::Path::new(&args.destination_path)
             .components()
-            .any(|component| {
-                component.as_os_str() == ".backup" || component.as_os_str() == ".autosave"
-            })
+            .any(|component| component.as_os_str() == ".autosave")
         {
-            return tool_error("Cannot create an editable subtitle inside .backup or .autosave");
+            return tool_error("Cannot create an editable subtitle inside .autosave");
         }
         let options = subtitle::AssTemplateOptions {
             title: args.title,
@@ -536,7 +536,7 @@ impl SubtitleServer {
     }
 
     #[tool(
-        description = "Restore a registered .ass subtitle from its own sibling .backup or .autosave version. Requires current expected_revision and version_path. The currently active file is preserved as a new autosave before restoring the selected version. This restores the entire file; use update_ass_events to undo only selected event fields."
+        description = "Restore a registered .ass subtitle from its own sibling .autosave version. Requires current expected_revision and version_path. The currently active file is preserved as a new autosave before restoring the selected version. This restores the entire file; use update_ass_events to undo only selected event fields."
     )]
     fn restore_ass_version(
         &self,

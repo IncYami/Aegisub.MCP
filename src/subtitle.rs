@@ -8,7 +8,6 @@ mod ass_mutation;
 mod audit;
 mod automation;
 mod autosave;
-mod backup;
 mod context;
 mod direct_events;
 mod edit;
@@ -23,7 +22,7 @@ pub use ass_mutation::{
     AssEventPatch, delete_ass_events, move_ass_event, restore_ass_version, update_ass_events,
 };
 pub use audit::{AuditPolicy, audit_subtitle};
-pub use backup::prepare_subtitle;
+pub use autosave::prepare_subtitle;
 pub use direct_events::{NewAssEvent, create_ass_events};
 pub use edit::{replace_segment, replace_text, replace_text_batch};
 pub use event_import::insert_events_from_source;

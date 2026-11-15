@@ -92,9 +92,9 @@ fn destination(path: &str) -> Result<PathBuf> {
     let path = fs::canonicalize(path).map_err(|e| error(format!("Cannot resolve ASS: {e}")))?;
     if path
         .components()
-        .any(|part| part.as_os_str() == ".backup" || part.as_os_str() == ".autosave")
+        .any(|part| part.as_os_str() == ".autosave")
     {
-        return Err(error("Files inside .backup or .autosave cannot be edited"));
+        return Err(error("Files inside .autosave cannot be edited"));
     }
     if !path
         .extension()
@@ -424,10 +424,8 @@ pub fn restore_ass_version(
     let source_parent = source
         .parent()
         .ok_or_else(|| error("Version has no parent"))?;
-    if source_parent != parent.join(".backup") && source_parent != parent.join(".autosave") {
-        return Err(error(
-            "Restore source must be a sibling .backup or .autosave version",
-        ));
+    if source_parent != parent.join(".autosave") {
+        return Err(error("Restore source must be a sibling .autosave version"));
     }
     let stem = destination
         .file_stem()
@@ -438,7 +436,7 @@ pub fn restore_ass_version(
         .and_then(|name| name.to_str())
         .ok_or_else(|| error("Invalid version filename"))?;
     if !name.starts_with(&format!("{stem}."))
-        || !(name.ends_with(".BACKUP.ass") || name.ends_with(".AUTOSAVE.ass"))
+        || !(name.ends_with(".ORIGINAL.ass") || name.ends_with(".AUTOSAVE.ass"))
     {
         return Err(error(
             "Restore source does not belong to the destination subtitle",

@@ -313,9 +313,9 @@ pub fn create_ass_events(
         .map_err(|e| error(format!("Cannot resolve destination ASS: {e}")))?;
     if path
         .components()
-        .any(|component| component.as_os_str() == ".backup" || component.as_os_str() == ".autosave")
+        .any(|component| component.as_os_str() == ".autosave")
     {
-        return Err(error("Files inside .backup or .autosave cannot be edited"));
+        return Err(error("Files inside .autosave cannot be edited"));
     }
     if !path
         .extension()

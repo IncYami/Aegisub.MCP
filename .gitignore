@@ -1,7 +1,6 @@
 /target/
 /result
 /.direnv/
-.backup/
 .autosave/
 /*.ass
 /rev.txt

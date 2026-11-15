@@ -23,8 +23,7 @@ This project implements a Rust MCP server for reading and editing subtitles dire
 - `src/subtitle/context.rs` aligns external tracks by time.
 - `src/subtitle/group.rs` groups exact visible text across all events, independent of style or timing, and applies one translation atomically to safe group members.
 - `src/subtitle/timed_text.rs` parses SRT and WebVTT cues.
-- `src/subtitle/backup.rs` creates timestamped backups in a sibling `.backup` directory before the MCP layer authorizes edits to an existing subtitle.
-- `src/subtitle/autosave.rs` serializes edits across server processes and keeps the displaced subtitle in a sibling `.autosave` directory whenever an edit succeeds.
+- `src/subtitle/autosave.rs` creates a timestamped `.ORIGINAL` copy in a sibling `.autosave` directory before the MCP layer authorizes edits to an existing subtitle, serializes edits across server processes, and keeps the displaced version of every successful edit in the same directory.
 - `src/subtitle/ass_creation.rs` creates empty ASS working files with a configurable base script and Default style.
 - `src/subtitle/event_import.rs` inserts source subtitle events into an ASS working file without changing the source.
 - `src/subtitle/ass_lines.rs` reads ASS Dialogue fields by Format order for audit and structural edits.
@@ -43,7 +42,7 @@ This project implements a Rust MCP server for reading and editing subtitles dire
 - If an edit cannot preserve the structure safely, return an explicit error instead of writing an approximation.
 - Re-read the file and detect concurrent changes before writing. Validate an entire batch before writing any edit.
 - Do not overwrite `tests/fixtures/sample.ass`. Use temporary copies in tests.
-- Require a successful backup before registering an existing subtitle for in-place MCP edits. Edit tools must accept only files registered in the current server session. Never edit a file inside `.backup` or `.autosave`.
+- Require a successful original copy before registering an existing subtitle for in-place MCP edits. Edit tools must accept only files registered in the current server session. Never edit a file inside `.autosave`.
 
 ## References
 

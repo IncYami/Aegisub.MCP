@@ -76,11 +76,9 @@ pub fn create_ass(destination: &str, options: &AssTemplateOptions) -> Result<Ass
         .map_err(|e| error(format!("Cannot resolve ASS destination directory: {e}")))?;
     if parent
         .components()
-        .any(|component| component.as_os_str() == ".backup" || component.as_os_str() == ".autosave")
+        .any(|component| component.as_os_str() == ".autosave")
     {
-        return Err(error(
-            "Cannot create an editable subtitle inside .backup or .autosave",
-        ));
+        return Err(error("Cannot create an editable subtitle inside .autosave"));
     }
     let mut temporary = tempfile::Builder::new()
         .prefix(".aegisub-mcp-")
